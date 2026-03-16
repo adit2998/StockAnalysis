@@ -55,6 +55,59 @@ def get_latest_form_url(cik: str, requestedForm: FormType):
     
     except requests.exceptions.RequestException as e:
         return f"An error occurred: {e}"
+    
+def get_all_form_urls(cik: str, requestedForm: FormType):
+    """
+    Fetch the URL for the all the statement filings of a company using the SEC EDGAR API.
+
+    Parameters:
+    cik (str): The Central Index Key (CIK) of the company.
+    requestedForm (FormType): The type of form that can be analysed.
+
+    Returns:
+    str: URL of the latest filing of the requested form or a message if no filing is found.
+    """    
+
+    # SEC EDGAR API endpoint for company submissions
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+
+    try:
+        # Fetch data from SEC API
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        ###########
+        import json
+        with open("form_data.json", "w") as f:
+            json.dump(data, f, indent=4)
+        ###########
+        
+        # Get filings from 'filings' key
+        filings = data.get("filings", {}).get("recent", {})
+        form_types = filings.get("form", [])
+        accession_numbers = filings.get("accessionNumber", [])
+        primary_documents = filings.get("primaryDocument", [])
+        filing_dates = filings.get("filingDate", [])
+        report_dates = filings.get("reportDate", [])
+        
+        urls = []
+        filings_map = {}
+        reports_map = {}
+        # Find the filings for the specified form
+        for form, acc_num, primary_doc, filing_date, report_date in zip(form_types, accession_numbers, primary_documents, filing_dates, report_dates):
+            if form == requestedForm:
+                # Construct filing PDF URL
+                pdf_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num.replace('-', '')}/{primary_doc}"
+                
+                filings_map[filing_date] = pdf_url
+                reports_map[report_date] = pdf_url
+                urls.append(pdf_url)
+        
+        return reports_map, filings_map, urls
+    
+    except requests.exceptions.RequestException as e:
+        return f"An error occurred: {e}"
 
 
 def save_form(ticker: str, formType: FormType, url: str):
