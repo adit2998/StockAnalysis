@@ -171,7 +171,8 @@ ticker = 'ai'
 filename = "ai_10-Q_report.pdf"
 
 report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename)
-
+with open("section_data.json", "w") as f:
+    json.dump(report_content, f, indent=4)
 
 def write_dict_to_mongo(mongo_uri, db_name, collection_name, data_dict):
     """
@@ -200,6 +201,39 @@ def write_dict_to_mongo(mongo_uri, db_name, collection_name, data_dict):
     # Return the ID of the inserted document
     return str(result.inserted_id)
 
+def write_report_to_mongo(mongo_uri, db_name, collection_name, data_dict):
+    """
+    Writes a report document to MongoDB using file_name as the unique _id.
+    If a document with the same _id exists, it will be updated (upsert).
+
+    Parameters:
+        mongo_uri (str): MongoDB connection URI.
+        db_name (str): Database name.
+        collection_name (str): Collection name.
+        data_dict (dict): Dictionary to write as document. Must include 'file_name'.
+
+    Returns:
+        str: The _id of the inserted or updated document.
+    """
+    if "file_name" not in data_dict:
+        raise ValueError("data_dict must include 'file_name' key")
+
+    client = pymongo.MongoClient(mongo_uri)
+    db = client[db_name]
+    collection = db[collection_name]
+
+    # Use file_name as _id
+    data_dict["_id"] = data_dict["file_name"]
+
+    # Upsert the document
+    result = collection.update_one(
+        {"_id": data_dict["_id"]},
+        {"$set": data_dict},
+        upsert=True
+    )
+
+    return str(data_dict["_id"])
+
 def process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_name, ticker, filename):
     report_content = extract_content_with_sections(mongo_uri, db_name_read, ticker, filename)
     result = write_dict_to_mongo(mongo_uri, db_name_write, collection_name, report_content)
@@ -213,4 +247,4 @@ ticker = 'amzn'
 filename = "amzn_10-Q_report.pdf"
 
 # print('New entry created: ', write_dict_to_mongo(mongo_uri, db_name, collection_name, report_content))
-print(process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_name, ticker, filename))
+# print(process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_name, ticker, filename))

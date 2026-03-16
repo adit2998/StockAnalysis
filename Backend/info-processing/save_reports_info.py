@@ -1,6 +1,6 @@
 import requests
 from enum import Enum
-from sec_api_utils import getCIKNumber
+from sec_api_utils import getCIKNumber, FormType
 from weasyprint import HTML
 import os
 import pymongo
@@ -10,11 +10,6 @@ from pymongo import MongoClient
 
 
 headers = {"User-Agent": "adit29my@gmail.com"} 
-
-class FormType(str, Enum):
-    TEN_K = "10-K"
-    TEN_Q = "10-Q"
-    DEF_14A = "DEF 14A"
 
 def get_latest_form_url(cik: str, requestedForm: FormType):
     """
@@ -56,17 +51,19 @@ def get_latest_form_url(cik: str, requestedForm: FormType):
     except requests.exceptions.RequestException as e:
         return f"An error occurred: {e}"
     
-def get_all_form_urls(cik: str, requestedForm: FormType):
+def get_all_form_urls(ticker: str, requestedForm: FormType):
     """
     Fetch the URL for the all the statement filings of a company using the SEC EDGAR API.
 
     Parameters:
-    cik (str): The Central Index Key (CIK) of the company.
+    ticker (str): The ticker for the company
     requestedForm (FormType): The type of form that can be analysed.
 
     Returns:
     str: URL of the latest filing of the requested form or a message if no filing is found.
     """    
+
+    cik = getCIKNumber(ticker)
 
     # SEC EDGAR API endpoint for company submissions
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -75,13 +72,7 @@ def get_all_form_urls(cik: str, requestedForm: FormType):
         # Fetch data from SEC API
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        data = response.json()
-
-        ###########
-        import json
-        with open("form_data.json", "w") as f:
-            json.dump(data, f, indent=4)
-        ###########
+        data = response.json()        
         
         # Get filings from 'filings' key
         filings = data.get("filings", {}).get("recent", {})
@@ -89,22 +80,27 @@ def get_all_form_urls(cik: str, requestedForm: FormType):
         accession_numbers = filings.get("accessionNumber", [])
         primary_documents = filings.get("primaryDocument", [])
         filing_dates = filings.get("filingDate", [])
-        report_dates = filings.get("reportDate", [])
-        
-        urls = []
-        filings_map = {}
-        reports_map = {}
+        report_dates = filings.get("reportDate", [])            
+
+        reports_info = []
         # Find the filings for the specified form
         for form, acc_num, primary_doc, filing_date, report_date in zip(form_types, accession_numbers, primary_documents, filing_dates, report_dates):
             if form == requestedForm:
                 # Construct filing PDF URL
                 pdf_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num.replace('-', '')}/{primary_doc}"
                 
-                filings_map[filing_date] = pdf_url
-                reports_map[report_date] = pdf_url
-                urls.append(pdf_url)
+                reports_info.append({
+                    'id': cik + '_' + acc_num + '_' + primary_doc,
+                    'Ticker': ticker,
+                    'Primary document': primary_doc,
+                    'Form Type': form,
+                    'Filing date': filing_date,
+                    'Report date': report_date,
+                    'File name': f"{ticker}_{form}_report_{filing_date}.pdf",
+                    'url': pdf_url
+                })                
         
-        return reports_map, filings_map, urls
+        return reports_info
     
     except requests.exceptions.RequestException as e:
         return f"An error occurred: {e}"
@@ -186,7 +182,7 @@ def retrieve_pdf_from_mongo(filename: str, local_path: str):
         print(f"File '{filename}' not found in MongoDB.")
 
 
-ticker = 'amzn'
+ticker = 'aapl'
 formType = FormType.TEN_Q
 cik = getCIKNumber(ticker)
 url = get_latest_form_url(cik, formType)
@@ -194,7 +190,12 @@ url = get_latest_form_url(cik, formType)
 # print(url)
 # save_form(ticker, formType, url)
 
-save_pdf_to_mongo(ticker, formType, url)
+
+# reports_info = get_all_form_urls(cik, formType)
+# for report_info in reports_info:
+#     print(report_info)
+
+# save_pdf_to_mongo(ticker, formType, url)
 
 # retrieve_pdf_from_mongo(f"{ticker}_{formType}_report.pdf", f"{ticker}_{formType}_report.pdf")
 # retrieve_pdf_from_mongo("ai_10-Q_report.pdf", "ai_10-Q_report.pdf")
