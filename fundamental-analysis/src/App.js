@@ -1,15 +1,19 @@
-// App.js
 import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+
+import LandingPage from './components/LandingPage';
+import CompaniesList from './components/CompaniesList';
+import AppNavbar from './components/Navbar';
 
 function App() {
   return (
-    <div className="container mt-5">
-      <h1 className="text-center text-primary">Welcome to My Homepage</h1>
-      <p className="text-center">This is a React app with Bootstrap!</p>
-      <div className="d-flex justify-content-center">
-        <button className="btn btn-success">Click Me</button>
-      </div>
-    </div>
+    <Router>
+      <AppNavbar />
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/companies" element={<CompaniesList />} />     
+      </Routes>
+    </Router>
   );
 }
 
