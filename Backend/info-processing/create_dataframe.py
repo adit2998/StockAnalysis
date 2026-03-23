@@ -1,5 +1,6 @@
 import pandas as pd
 from sec_api_utils import getHistoricalData
+import numpy as np
 
 headers = {"User-Agent": "adit29my@gmail.com"} 
 
@@ -13,13 +14,19 @@ def addColumns(df, ratioDictionary):
 
 def calculateRatios(dataDf):
     
-    df = pd.DataFrame(dataDf).T
-    # df.index = pd.to_datetime(df.index)
+    df = pd.DataFrame(dataDf).T    
+    revenue_columns = [
+        'Revenue, Net (Deprecated 2018-01-31)',
+        'Revenue from Contract with Customer, Excluding Assessed Tax'
+    ]
 
-    if 'Revenue, Net (Deprecated 2018-01-31)' in df.columns:
-        df['Effective Revenue'] = df['Revenue, Net (Deprecated 2018-01-31)'].fillna(df['Revenue from Contract with Customer, Excluding Assessed Tax'])
+    existing_cols = [c for c in revenue_columns if c in df.columns]
+
+    if existing_cols:
+        df['Effective Revenue'] = df[existing_cols].bfill(axis=1).iloc[:, 0]
     else:
-        df['Effective Revenue'] = df['Revenue from Contract with Customer, Excluding Assessed Tax']
+        df['Effective Revenue'] = np.nan
+
     
     df['Operating Margin Ratio'] = df['Operating Income (Loss)'] / df['Effective Revenue']
     ratioDictionary = {
@@ -30,7 +37,7 @@ def calculateRatios(dataDf):
         'Return on Equity Ratio': (['Net Income (Loss) Attributable to Parent', 'Stockholders\' Equity Attributable to Parent'], lambda df: df['Net Income (Loss) Attributable to Parent'] / df['Stockholders\' Equity Attributable to Parent']),
         'Current Ratio': (['Assets, Current', 'Liabilities, Current'], lambda df: df['Assets, Current'] / df['Liabilities, Current']),
         'Quick Ratio': (['Assets, Current', 'Inventory, Net', 'Liabilities, Current'], lambda df: df['Assets, Current'] - df['Inventory, Net'] / df['Liabilities, Current']),
-        'Cash Ratio': (['Cash and Cash Equivalents, at Carrying Value', 'Liabilities, Current'], lambda df: df['Cash and Cash Equivalents, at Carrying Value'] / df['Liabilities']),
+        'Cash Ratio': (['Cash and Cash Equivalents, at Carrying Value', 'Liabilities, Current'], lambda df: df['Cash and Cash Equivalents, at Carrying Value'] / df['Liabilities, Current']),
         'Debt to Equity (D/E) Ratio': (['Liabilities', 'Stockholders\' Equity Attributable to Parent'], lambda df: df['Liabilities'] / df['Stockholders\' Equity Attributable to Parent']),
         'Debt to Assets Ratio': (['Liabilities', 'Assets'], lambda df: df['Liabilities'] / df['Assets']),
         'Interest Coverage Ratio': (['Operating Income (Loss)', 'Interest Expense'], lambda df: df['Operating Income (Loss)'] / df['Interest Expense']),
@@ -63,5 +70,3 @@ def makeCompanyDataframe(ticker):
     enhanced_df = enhanced_df.reset_index()
     
     return enhanced_df
-
-    

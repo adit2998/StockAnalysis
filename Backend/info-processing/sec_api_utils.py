@@ -1,7 +1,14 @@
 import pandas as pd
 import requests
+from enum import Enum
 
 headers = {"User-Agent": "adit29my@gmail.com"} 
+
+
+class FormType(str, Enum):
+    TEN_K = "10-K"
+    TEN_Q = "10-Q"
+    DEF_14A = "DEF 14A"
 
 def getCIKNumber(ticker, headers=headers):
     ticker = ticker.upper().replace(".", "-")
