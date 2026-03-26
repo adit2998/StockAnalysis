@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
+require('dotenv').config();
 
 const companiesRouter = require('./routes/companies');
 const companyReportsRouter = require('./routes/companyReports');
@@ -11,7 +12,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const uri = "mongodb://localhost:27017"; // adjust if using Docker
+const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
 async function startServer() {
@@ -19,7 +20,7 @@ async function startServer() {
     await client.connect();
     console.log("Connected to MongoDB");
 
-    const db = client.db('stocks_data');
+    const db = client.db(process.env.DB_NAME);
     
     app.use('/api/companies', companiesRouter(db));
     app.use('/api/company-reports', companyReportsRouter(db));
