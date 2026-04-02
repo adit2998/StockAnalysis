@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { MongoClient } = require('mongodb');
-require('dotenv').config();
+require('dotenv-flow').config();
 
 const companiesRouter = require('./routes/companies');
 const companyReportsRouter = require('./routes/companyReports');

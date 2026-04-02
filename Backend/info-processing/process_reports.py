@@ -165,14 +165,14 @@ def extract_content_with_sections(mongo_uri, db_name, ticker, filename):
 
 
 # Example usage
-mongo_uri = "mongodb://localhost:27017"
-db_name = "financial_reports"
-ticker = 'ai'
-filename = "ai_10-Q_report.pdf"
+# mongo_uri = "mongodb://localhost:27017"
+# db_name = "financial_reports"
+# ticker = 'ai'
+# filename = "ai_10-Q_report.pdf"
 
-report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename)
-with open("section_data.json", "w") as f:
-    json.dump(report_content, f, indent=4)
+# report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename)
+# with open("section_data.json", "w") as f:
+#     json.dump(report_content, f, indent=4)
 
 def write_dict_to_mongo(mongo_uri, db_name, collection_name, data_dict):
     """
@@ -239,12 +239,12 @@ def process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_n
     result = write_dict_to_mongo(mongo_uri, db_name_write, collection_name, report_content)
     return result
 
-mongo_uri = "mongodb://localhost:27017"
-db_name_read = "financial_reports"
-db_name_write = "testDb"
-collection_name = "company_reports"
-ticker = 'amzn'
-filename = "amzn_10-Q_report.pdf"
+# mongo_uri = "mongodb://localhost:27017"
+# db_name_read = "financial_reports"
+# db_name_write = "testDb"
+# collection_name = "company_reports"
+# ticker = 'amzn'
+# filename = "amzn_10-Q_report.pdf"
 
 # print('New entry created: ', write_dict_to_mongo(mongo_uri, db_name, collection_name, report_content))
 # print(process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_name, ticker, filename))
