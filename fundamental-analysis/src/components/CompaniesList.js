@@ -10,7 +10,7 @@ const CompaniesList = () => {
   useEffect(() => {
     const fetchCompanies = async () => {
       try {
-        const response = await fetch('http://localhost:5001/api/companies');
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/companies`);
         if (!response.ok) {
           throw new Error('Failed to fetch tickers');
         }

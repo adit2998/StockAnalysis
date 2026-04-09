@@ -13,7 +13,7 @@ const CompanyPage = () => {
   useEffect(() => {
     const fetchCompany = async () => {
       try {
-        const response = await fetch(`http://localhost:5001/api/companies/${ticker}`);
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/companies/${ticker}`);
         if (!response.ok) throw new Error('Company not found');
         const data = await response.json();
         setCompany(data);

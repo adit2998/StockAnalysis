@@ -3,6 +3,7 @@ version: "3.8"
 services:
 
   frontend:
+    image: stockanalysis-frontend:local
     build: ./fundamental-analysis  # path to your React app folder
     ports:
       - "3000:3000"
@@ -14,6 +15,7 @@ services:
 
   # ── Node Backend ────────────────────────────────────────────────
   server:
+    image: stockanalysis-server:local
     build: ./Backend/node-backend
     container_name: stockanalysis-server
     env_file:

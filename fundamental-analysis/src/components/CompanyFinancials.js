@@ -25,7 +25,7 @@ const CompanyFinancials = () => {
   useEffect(() => {
     const fetchFinancials = async () => {
       try {        
-        const response = await fetch(`http://localhost:5001/api/financials/${ticker}`);
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/financials/${ticker}`);
         const json = await response.json();
         setData(json);
       } catch (err) {
