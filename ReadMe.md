@@ -112,3 +112,40 @@ Start port forwarding for frontend pod:
 `kubectl port-forward <pod-name> 3000:3000`
 (Also have backend port forwarding running)
 The frontend Pod's only job is to serve the JavaScript files to your browser. Once your browser has those files, it runs them locally on your Mac. All the API calls your React code makes then originate directly from your Mac — which is why they need their own tunnel into the cluster.
+
+
+
+
+To use the Kubernetes set up:
+
+1. Start minikube
+`minikube start --driver=docker`
+
+2. — Point terminal at minikube's Docker and build images
+`eval $(minikube docker-env)`
+`docker compose build frontend server`
+
+3. — Apply all Kubernetes manifests
+kubectl apply -f k8s/mongo-pv.yaml
+kubectl apply -f k8s/mongo-pvc.yaml
+kubectl apply -f k8s/mongo-deployment.yaml
+kubectl apply -f k8s/mongo-service.yaml
+kubectl apply -f k8s/server-secret.yaml
+kubectl apply -f k8s/server-deployment.yaml
+kubectl apply -f k8s/server-service.yaml
+kubectl apply -f k8s/frontend-secret.yaml
+kubectl apply -f k8s/frontend-deployment.yaml
+kubectl apply -f k8s/frontend-service.yaml
+
+4. — Wait for all Pods to be running
+`kubectl get pods --watch`
+
+5. — Open port-forwards (each in its own terminal tab)
+Frontend
+`kubectl port-forward <port-name> 3000:3000`
+
+Backend
+`kubectl port-forward <port-name> 5001:5001`
+
+Leave the Mongo on to run the processing from python
+`kubectl port-forward <port-name> 27017:27017`
