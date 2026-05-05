@@ -182,16 +182,17 @@ def retrieve_pdf_from_mongo(filename: str, local_path: str):
         print(f"File '{filename}' not found in MongoDB.")
 
 
-ticker = 'aapl'
-formType = FormType.TEN_Q
+ticker = 'amd'
+formType = FormType.DEF_14A
 cik = getCIKNumber(ticker)
-url = get_latest_form_url(cik, formType)
+# url = get_latest_form_url(cik, formType)
 
 # print(url)
 # save_form(ticker, formType, url)
 
 
-# reports_info = get_all_form_urls(cik, formType)
+# reports_info = get_all_form_urls(ticker, formType)
+# print(reports_info)
 # for report_info in reports_info:
 #     print(report_info)
 
