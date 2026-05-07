@@ -2,9 +2,12 @@ import fitz
 import re
 import pymongo
 import gridfs
-
-import re
+import os
 import json
+
+import anthropic
+from extractors import extract_from_10K_10Q, extract_from_DEF_14A
+from sec_api_utils import FormType
 
 def prettify_text(text):
     # Convert the entire text to lowercase
@@ -127,6 +130,7 @@ def extract_section(document, section_heading):
         return f"Error: {str(e)}"
     
 
+
 def extract_content(mongo_uri, db_name, filename):
     
     document = open_document(mongo_uri, db_name, filename)
@@ -143,25 +147,12 @@ def extract_content(mongo_uri, db_name, filename):
 
     return info_dict
 
-def extract_content_with_sections(mongo_uri, db_name, ticker, filename):
-    
-    document = open_document(mongo_uri, db_name, filename)
-    headers = extract_headers(document)    
-    
-    sections_dict = {}
+def extract_content_with_sections(mongo_uri, db_name, ticker, filename, form_type=FormType.TEN_K):
 
-    for header in headers:
-        sections_dict[header] = extract_section(document, header)        
+    if form_type == FormType.DEF_14A:
+        return extract_from_DEF_14A(mongo_uri, db_name, ticker, filename)
 
-    info_dict = {
-        'ticker': ticker,
-        'file_name': filename,
-        'sections': sections_dict
-    }
-
-    document.close()
-
-    return info_dict
+    return extract_from_10K_10Q(mongo_uri, db_name, ticker, filename)
 
 
 # Example usage
@@ -233,6 +224,92 @@ def write_report_to_mongo(mongo_uri, db_name, collection_name, data_dict):
     )
 
     return str(data_dict["_id"])
+
+def summarize_report(report_content):
+    """
+    Summarizes each section in a report using the Anthropic API.
+
+    Parameters:
+        report_content (dict): Dict with 'ticker', 'file_name', and 'sections' keys.
+
+    Returns:
+        dict: Same structure with summarized section text.
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+    summarized_sections = {}
+
+    for section_name, section_content in report_content["sections"].items():
+        if not section_content or section_content in ("Section not found.",) or section_content.startswith("Error:"):
+            summarized_sections[section_name] = section_content
+            continue
+
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Summarize the following section from a company's SEC filing in plain, readable prose.\n\n"
+                        f"Rules:\n"
+                        f"- Write exactly 3 paragraphs, no more\n"
+                        f"- Start the first word of the first paragraph directly — no title, no heading, no label like 'Summary:' or 'This section...'\n"
+                        f"- Do not include the company name, section name, form type, or filing year in the output\n"
+                        f"- Use plain sentences a non-expert can follow; avoid legal or financial jargon\n"
+                        f"- Keep all important numbers, percentages, and financial figures exactly as stated\n"
+                        f"- Focus on what actually matters: key facts, risks, results, and decisions\n"
+                        f"- Omit boilerplate, legal disclaimers, and repeated or obvious statements\n\n"
+                        f"Section: {section_name}\n\n"
+                        f"Content:\n{section_content[:12000]}"
+                    ),
+                }
+            ],
+        )
+
+        summarized_sections[section_name] = message.content[0].text
+        print(f"  Summarized section: {section_name}")
+
+    return {
+        "ticker": report_content["ticker"],
+        "file_name": report_content["file_name"],
+        "sections": summarized_sections,
+    }
+
+
+def write_summary_to_mongo(mongo_uri, db_name, collection_name, summary_dict):
+    """
+    Upserts a summarized report into MongoDB, keyed by file_name as _id,
+    with an explicit 'id' field matching file_name.
+
+    Returns:
+        str: The _id of the inserted or updated document.
+    """
+    if not isinstance(summary_dict, dict):
+        raise ValueError("The data must be a dictionary.")
+    if "file_name" not in summary_dict:
+        raise ValueError("summary_dict must include 'file_name' key.")
+
+    document = {
+        "_id": summary_dict["file_name"],
+        "id": summary_dict["file_name"],
+        "file_name": summary_dict["file_name"],
+        "ticker": summary_dict["ticker"],
+        "sections": summary_dict["sections"],
+    }
+
+    client = pymongo.MongoClient(mongo_uri)
+    db = client[db_name]
+    collection = db[collection_name]
+
+    collection.update_one(
+        {"_id": document["_id"]},
+        {"$set": document},
+        upsert=True,
+    )
+
+    return document["_id"]
+
 
 def process_and_save_report(mongo_uri, db_name_read, db_name_write, collection_name, ticker, filename):
     report_content = extract_content_with_sections(mongo_uri, db_name_read, ticker, filename)

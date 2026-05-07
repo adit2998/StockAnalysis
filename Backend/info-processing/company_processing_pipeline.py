@@ -3,12 +3,13 @@ from sec_api_utils import getCompanyInfo
 from create_dataframe import makeCompanyDataframe
 from save_reports_info import get_all_form_urls
 from config import mongo_uri, db_name
-from process_reports import extract_content_with_sections, write_report_to_mongo
+from process_reports import extract_content_with_sections, write_report_to_mongo, summarize_report, write_summary_to_mongo
 from sec_api_utils import FormType
 import gridfs
 from weasyprint import HTML
 from io import BytesIO
 import pandas as pd
+import json
 
 def get_database():
     """
@@ -171,20 +172,44 @@ def save_report_pdfs(ticker, form_types):
             print(f"An error occurred while saving the PDF: {e}")
 
 
-def save_report_sections(ticker, form_types):
+def save_report_sections(ticker, form_types, max_summaries=None):
 
-    collection_name = "report_sections"
-    
     company_reports = get_reports_list(ticker, form_types)
+    summaries_done = 0
+
     for company_report in company_reports:
         filename = company_report['File name']
-        report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename)
-        print(f"Saving  - {report_content['file_name']}")
-        write_report_to_mongo(mongo_uri, db_name, collection_name, report_content)        
+        form_type = company_report['Form Type']
+        report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename, form_type=form_type)
+
+        print(f"Saving sections - {report_content['file_name']}")
+        write_report_to_mongo(mongo_uri, db_name, "report_sections", report_content)
+
+        if max_summaries is not None and summaries_done >= max_summaries:
+            print(f"Reached max_summaries limit ({max_summaries}), skipping summarization for {filename}.")
+            continue
+
+        db = get_database()
+        already_summarized = db["report_summaries"].find_one({"id": filename, "sections": {"$exists": True, "$ne": {}}})
+        if already_summarized:
+            print(f"Summary already exists for {filename}, skipping.")
+            continue
+
+        print(f"Summarizing - {report_content['file_name']}")
+        summarized_report_content = summarize_report(report_content)
+        summaries_done += 1
+
+        test_filename = f"test_summary_{filename.replace('.pdf', '')}.json"
+        with open(test_filename, "w") as f:
+            json.dump(summarized_report_content, f, indent=4)
+        print(f"Test summary written to {test_filename}")
+
+        print(f"Saving summaries - {summarized_report_content['file_name']}")
+        write_summary_to_mongo(mongo_uri, db_name, "report_summaries", summarized_report_content)
 
 
 
-def process_company(ticker, form_types=[FormType.TEN_K]):
+def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
 
     # 1. Add to the list of processed companies
     add_to_companies_list(ticker)
@@ -199,8 +224,8 @@ def process_company(ticker, form_types=[FormType.TEN_K]):
     save_report_pdfs(ticker, form_types)
 
     # 5. Report sections
-    save_report_sections(ticker, form_types)
+    save_report_sections(ticker, form_types, max_summaries=max_summaries)
 
 
-form_types = [FormType.TEN_K]
-process_company('NVDA', form_types)
+form_types = [FormType.DEF_14A]
+process_company('GOOG', form_types, max_summaries=0)

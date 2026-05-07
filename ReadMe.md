@@ -13,6 +13,10 @@ Command to start/stop mongodb locally
 - To process a company, run python company_processing_pipeline.py 
 In company_processing_pipeline.py, add the ticker in the parameter that you want to process
 
+If you want to run it and save in local docker, run this:
+`ENV=local python company_processing_pipeline.py`
+(Since it needs to pick up from .env.local)
+
 
 - To build the node docker container:
  `docker build -t stock-backend .`
