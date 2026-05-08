@@ -8,9 +8,12 @@ module.exports = (db) => {
     try {
       const { fileName } = req.params;
 
-      const collection = db.collection('report_sections');
+      const decodedFileName = decodeURIComponent(fileName);
 
-      const report = await collection.findOne({ _id: fileName });
+      let report = await db.collection('report_summaries').findOne({ _id: decodedFileName });
+      if (!report) {
+        report = await db.collection('report_sections').findOne({ _id: decodedFileName });
+      }
 
       if (!report) {
         return res.status(404).json({ error: 'Report not found' });
