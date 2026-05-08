@@ -31,5 +31,34 @@ module.exports = (db) => {
     }
   });
 
+  router.get('/:ticker/description', async (req, res) => {
+    try {
+      const { ticker } = req.params;
+      const upperTicker = ticker.toUpperCase();
+
+      const tenKFilter = { ticker: upperTicker, file_name: { $regex: '10-K', $options: 'i' } };
+
+      let doc = await db.collection('report_summaries')
+        .find(tenKFilter)
+        .sort({ _id: -1 })
+        .limit(1)
+        .next();
+
+      if (!doc?.sections?.['Business']) {
+        doc = await db.collection('report_sections')
+          .find(tenKFilter)
+          .sort({ _id: -1 })
+          .limit(1)
+          .next();
+      }
+
+      const description = doc?.sections?.['Business'] ?? null;
+      res.json({ description });
+    } catch (error) {
+      console.error('Error fetching company description:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
   return router;
 };
