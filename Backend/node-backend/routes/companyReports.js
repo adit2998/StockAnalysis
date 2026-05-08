@@ -15,6 +15,28 @@ module.exports = (db) => {
     }
   });
 
+  // GET /api/company-reports/:ticker/:formType
+  // Returns reports for a specific company filtered by form type
+  router.get('/:ticker/:formType', async (req, res) => {
+    try {
+      const { ticker, formType } = req.params;
+
+      const reports = await db
+        .collection('reports_list')
+        .find({
+          Ticker: ticker.toUpperCase(),
+          'Form Type': decodeURIComponent(formType),
+        })
+        .sort({ 'Filing date': -1 })
+        .toArray();
+
+      res.json(reports);
+    } catch (error) {
+      console.error('Error fetching company reports by type:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
   // GET /api/company-reports/:ticker
   // Returns all reports for a specific company
   router.get('/:ticker', async (req, res) => {
