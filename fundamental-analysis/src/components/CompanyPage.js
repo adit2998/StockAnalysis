@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Container, Card, Spinner, Alert, Nav } from 'react-bootstrap';
 import OverviewTab from './tabs/OverviewTab';
+import TrendsTab from './tabs/TrendsTab';
 import FinancialsTab from './tabs/FinancialsTab';
 import FilingsTab from './tabs/FilingsTab';
 import NewsTab from './tabs/NewsTab';
@@ -122,7 +123,7 @@ const CompanyPage = () => {
         className="mb-4"
         style={{ borderBottom: '1px solid #dee2e6' }}
       >
-        {['overview', 'financials', 'filings', 'news'].map((tab) => (
+        {['overview', 'trends', 'financials', 'filings', 'news'].map((tab) => (
           <Nav.Item key={tab}>
             <Nav.Link
               eventKey={tab}
@@ -141,6 +142,7 @@ const CompanyPage = () => {
 
       {/* Tab Content */}
       {activeTab === 'overview' && <OverviewTab company={company} />}
+      {activeTab === 'trends' && <TrendsTab company={company} />}
       {activeTab === 'financials' && <FinancialsTab company={company} />}
       {activeTab === 'filings' && <FilingsTab company={company} />}
       {activeTab === 'news' && <NewsTab company={company} />}

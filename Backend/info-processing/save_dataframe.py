@@ -15,7 +15,7 @@ def save_dataframe_to_csv(ticker):
     historical_financials_df.to_csv('processed_dataframe.csv', index=True)
 
 def save_financial_trends(ticker, collection):
-    df = makeCompanyDataframe(ticker) 
+    df = makeCompanyDataframe(ticker)
     # Initialize the financials dictionary
     financials = {}
     for _, row in df.iterrows():
@@ -37,10 +37,10 @@ def save_financial_trends(ticker, collection):
         # Only add the series if there's at least one valid entry
         if series:
             financials[str(fact_name)] = series
-    
+
     # Prepare final document
     company_doc = {
-        'ticker': ticker.lower(),        
+        'ticker': ticker.lower(),
         'financials': financials
     }
 
@@ -54,9 +54,9 @@ def save_financial_trends(ticker, collection):
 
 
 def save_dataframe_to_db(ticker, collection):
-    historical_financials_df = makeCompanyDataframe(ticker)   
+    historical_financials_df = makeCompanyDataframe(ticker)
     financials_data = historical_financials_df.to_dict(orient='records')
-    
+
     # Create the document structure
     document = {
         "ticker": ticker,
@@ -71,14 +71,14 @@ def save_dataframe_to_db(ticker, collection):
 def load_collection_to_dataframe(ticker, collection):
     # Find the document for the given ticker
     document = collection.find_one({"ticker": ticker})
-    
+
     if not document:
         raise ValueError(f"No data found for ticker: {ticker}")
-    
+
     # Extract the 'financials' field and convert to DataFrame
     financials_data = document.get("financials", [])
     dataframe = pd.DataFrame(financials_data)
-    
+
     dataframe.to_csv('extracted_dataframe.csv', index=True)
 
 
