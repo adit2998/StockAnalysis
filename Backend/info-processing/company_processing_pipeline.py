@@ -1,5 +1,6 @@
 from pymongo import MongoClient
-from sec_api_utils import getCompanyInfo
+from pymongo.errors import OperationFailure
+from sec_api_utils import getCompanyInfo, getFacts
 from create_dataframe import makeCompanyDataframe
 from save_reports_info import get_all_form_urls
 from config import mongo_uri, db_name
@@ -10,6 +11,45 @@ from weasyprint import HTML
 from io import BytesIO
 import pandas as pd
 import json
+
+_CF_KEYWORDS = [
+    'cash inflow', 'cash outflow', 'cash flow', 'operating activities',
+    'investing activities', 'financing activities', 'proceeds from',
+    'repurchase', 'repayment', 'purchase of',
+]
+_IS_KEYWORDS = [
+    'for the period', 'net result', 'revenue', 'expense', 'income', 'loss',
+    'earnings per share', 'per share', 'charged against earnings', 'recognized in',
+]
+
+def _classify_facts(facts_json):
+    """Returns dict: xbrl_key -> {'label': str, 'description': str, 'statement': str}"""
+    us_gaap = facts_json['facts']['us-gaap']
+    result = {}
+    for key, entry in us_gaap.items():
+        label = entry.get('label', '')
+        description = entry.get('description') or ''
+        desc_lower = description.lower()
+        is_instant = all(
+            not item.get('start')
+            for unit_items in entry['units'].values()
+            for item in unit_items[:5]
+        )
+        if is_instant:
+            statement = 'Balance Sheet'
+        else:
+            cf_hit = any(p in desc_lower for p in _CF_KEYWORDS)
+            is_hit = any(p in desc_lower for p in _IS_KEYWORDS)
+            if cf_hit and not is_hit:
+                statement = 'Cash Flow'
+            elif is_hit and not cf_hit:
+                statement = 'Income Statement'
+            elif cf_hit and is_hit:
+                statement = 'Ambiguous'
+            else:
+                statement = 'Unclassified'
+        result[key] = {'label': label, 'description': description, 'statement': statement}
+    return result
 
 def get_database():
     """
@@ -56,40 +96,66 @@ def save_company_financials(ticker):
     Args:
         ticker (str): Company ticker symbol, e.g., "AAPL"
     """
-
     db = get_database()
     collection = db["company_financials"]
 
+    # Classify all XBRL facts so we can tag each metric with its statement
+    facts_json = getFacts(ticker)
+    classification = _classify_facts(facts_json)
+    # label → (xbrl_key, statement); labels can collide across XBRL keys so
+    # later entries win — acceptable since the statement tag is the same for
+    # same-label concepts
+    label_to_meta = {v['label']: (k, v['statement'], v['description']) for k, v in classification.items()}
+
     df = makeCompanyDataframe(ticker)
 
-    # Ensure unique index for faster upserts
-    collection.create_index([("ticker", 1), ("metric", 1)], unique=True)
+    try:
+        collection.drop_index([("ticker", 1), ("metric", 1)])
+    except OperationFailure:
+        pass  # index already gone
+    collection.create_index("id", unique=True, sparse=True)
 
     for _, row in df.iterrows():
-        metric = row["fact"]
+        label = row["fact"]
+
+        xbrl_key, statement, description = label_to_meta.get(label, (None, 'Unclassified', ''))
+        if xbrl_key:
+            doc_id = f"{xbrl_key}_{ticker}"
+        else:
+            # Derived ratio labels won't have an XBRL key
+            slug = label.replace(' ', '_').replace('/', '_').replace(',', '').replace('(', '').replace(')', '').replace('-', '_')
+            doc_id = f"{slug}_{ticker}"
 
         for date_col in df.columns:
             if date_col == "fact":
                 continue
 
             value = row[date_col]
-
             if value is None or (isinstance(value, float) and pd.isna(value)):
                 continue
 
-            # Upsert: update if date exists, else push new
+            date_str = str(date_col)
+            val_float = float(value)
+
+            base_fields = {"ticker": ticker, "metric": label, "description": description, "statement": statement}
+
+            # Try to update the value for an existing date entry
             result = collection.update_one(
-                {"ticker": ticker, "metric": metric, "values.date": str(date_col)},
-                {"$set": {"values.$.value": float(value)}}
+                {"id": doc_id, "values.date": date_str},
+                {"$set": {**base_fields, "values.$.value": val_float}}
             )
 
             if result.matched_count == 0:
+                # Doc doesn't exist yet, or this date isn't in values — push the new entry
                 collection.update_one(
-                    {"ticker": ticker, "metric": metric},
-                    {"$push": {"values": {"date": str(date_col), "value": float(value)}}},
+                    {"id": doc_id},
+                    {
+                        "$set": base_fields,
+                        "$push": {"values": {"date": date_str, "value": val_float}}
+                    },
                     upsert=True
                 )
-    
+
     print(f"Inserted metrics for {ticker}")
 
 
@@ -227,5 +293,5 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
     save_report_sections(ticker, form_types, max_summaries=max_summaries)
 
 
-form_types = [FormType.DEF_14A]
+form_types = [FormType.TEN_K]
 process_company('GOOG', form_types, max_summaries=0)

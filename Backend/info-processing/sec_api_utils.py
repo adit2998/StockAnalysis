@@ -57,6 +57,7 @@ def getFacts(ticker, headers=headers):
     company_facts = requests.get(url, headers=headers).json()
     return company_facts
 
+
 def getFactsDF(ticker, headers=headers):
     facts = getFacts(ticker, headers)
     us_gaap_data = facts["facts"]["us-gaap"]
