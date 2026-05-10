@@ -273,7 +273,57 @@ def save_report_sections(ticker, form_types, max_summaries=None):
         print(f"Saving summaries - {summarized_report_content['file_name']}")
         write_summary_to_mongo(mongo_uri, db_name, "report_summaries", summarized_report_content)
 
+def save_financial_statements(ticker):
+    import yfinance as yf
+    from datetime import datetime
 
+    db = get_database()
+    yf_ticker = yf.Ticker(ticker)
+
+    statements = [
+        ('income_statements',    'annual',    lambda: yf_ticker.income_stmt),
+        ('income_statements',    'quarterly', lambda: yf_ticker.quarterly_income_stmt),
+        ('balance_sheets',       'annual',    lambda: yf_ticker.balance_sheet),
+        ('balance_sheets',       'quarterly', lambda: yf_ticker.quarterly_balance_sheet),
+        ('cash_flow_statements', 'annual',    lambda: yf_ticker.cashflow),
+        ('cash_flow_statements', 'quarterly', lambda: yf_ticker.quarterly_cashflow),
+    ]
+
+    for collection_name, period_type, fetch_fn in statements:
+        try:
+            df = fetch_fn()
+            if df is None or df.empty:
+                print(f"No data for {ticker} {collection_name} {period_type}, skipping.")
+                continue
+
+            periods = [col.strftime('%Y-%m-%d') for col in df.columns]
+            rows = []
+            for label, values in df.iterrows():
+                rows.append({
+                    'label': label,
+                    'values': {
+                        col.strftime('%Y-%m-%d'): (None if pd.isna(v) else int(v))
+                        for col, v in values.items()
+                    }
+                })
+
+            doc = {
+                'ticker':      ticker.upper(),
+                'period_type': period_type,
+                'fetched_at':  datetime.utcnow().isoformat(),
+                'periods':     periods,
+                'rows':        rows,
+            }
+
+            db[collection_name].update_one(
+                {'ticker': ticker.upper(), 'period_type': period_type},
+                {'$set': doc},
+                upsert=True
+            )
+            print(f"Saved {period_type} {collection_name} for {ticker} ({len(periods)} periods, {len(rows)} rows)")
+
+        except Exception as e:
+            print(f"Failed to save {period_type} {collection_name} for {ticker}: {e}")
 
 def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
 
@@ -292,6 +342,9 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
     # 5. Report sections
     save_report_sections(ticker, form_types, max_summaries=max_summaries)
 
+    # 6. Financial statements
+    save_financial_statements(ticker)
+
 
 form_types = [FormType.TEN_K]
-process_company('GOOG', form_types, max_summaries=0)
+process_company('AAPL', form_types, max_summaries=0)

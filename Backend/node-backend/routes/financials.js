@@ -52,6 +52,37 @@ module.exports = (db) => {
     }
   });
 
+  // GET financial statement (income / balance / cashflow) for annual or quarterly
+  // Query params: statement=income|balance|cashflow, period=annual|quarterly
+  router.get('/:ticker/statements', async (req, res) => {
+    try {
+      const { ticker } = req.params;
+      const { statement = 'income', period = 'annual' } = req.query;
+
+      const collectionMap = {
+        income:   'income_statements',
+        balance:  'balance_sheets',
+        cashflow: 'cash_flow_statements',
+      };
+
+      const collectionName = collectionMap[statement];
+      if (!collectionName) {
+        return res.status(400).json({ error: 'Invalid statement type. Use income, balance, or cashflow.' });
+      }
+
+      const doc = await db.collection(collectionName).findOne(
+        { ticker: ticker.toUpperCase(), period_type: period },
+        { projection: { _id: 0 } }
+      );
+
+      if (!doc) return res.status(404).json({ error: 'No data found' });
+      res.json(doc);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to fetch financial statement' });
+    }
+  });
+
   // GET first 5 metrics for a ticker (existing, used elsewhere)
   router.get('/:ticker', async (req, res) => {
     try {
