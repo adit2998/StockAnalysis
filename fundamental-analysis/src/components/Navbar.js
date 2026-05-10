@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Bell, TrendingUp } from 'lucide-react';
+import { Bell, TrendingUp } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const Logo = () => (
   <div style={{
@@ -51,9 +52,18 @@ const TickerBadge = ({ children }) => (
   </span>
 );
 
+const getInitials = (name) => {
+  if (!name) return '?';
+  const parts = name.trim().split(' ');
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+};
+
 const AppNavbar = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
   const pathParts = location.pathname.split('/').filter(Boolean);
   const onCompanyPage = pathParts[0] === 'companies' && pathParts.length >= 2;
@@ -70,10 +80,24 @@ const AppNavbar = () => {
       .catch(() => {});
   }, [ticker]);
 
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handler = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   const isHome = location.pathname === '/';
   const isCompanies = location.pathname.startsWith('/companies');
-
   const showContextBar = onCompanyPage && company;
+
+  const handleLogout = () => {
+    setMenuOpen(false);
+    logout();
+    navigate('/');
+  };
 
   return (
     <header style={{
@@ -109,54 +133,69 @@ const AppNavbar = () => {
           <NavLink active={isCompanies} onClick={() => navigate('/companies')}>Companies</NavLink>
         </nav>
 
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
-
-        {/* Search */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: '#f3f4f6',
-          borderRadius: '8px',
-          padding: '7px 12px',
-          minWidth: '220px',
-        }}>
-          <Search size={15} color="#9ca3af" strokeWidth={2} />
-          <span style={{ flex: 1, fontSize: '14px', color: '#9ca3af' }}>Search...</span>
-          <span style={{
-            fontSize: '11px',
-            color: '#9ca3af',
-            background: '#e5e7eb',
-            borderRadius: '4px',
-            padding: '1px 5px',
-            fontFamily: 'system-ui',
-          }}>⌘K</span>
-        </div>
 
         {/* Bell */}
         <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}>
           <Bell size={20} color="#6b7280" strokeWidth={2} />
         </button>
 
-        {/* Avatar */}
-        <div style={{
-          width: '34px',
-          height: '34px',
-          borderRadius: '50%',
-          background: '#2563eb',
-          color: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: 700,
-          fontSize: '12px',
-          flexShrink: 0,
-          cursor: 'pointer',
-          userSelect: 'none',
-        }}>
-          JA
-        </div>
+        {/* Avatar / user menu */}
+        {user ? (
+          <div ref={menuRef} style={{ position: 'relative' }}>
+            <div
+              onClick={() => setMenuOpen(o => !o)}
+              title={user.name}
+              style={{
+                width: '34px', height: '34px', borderRadius: '50%',
+                background: '#2563eb', color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 700, fontSize: '12px',
+                flexShrink: 0, cursor: 'pointer', userSelect: 'none',
+              }}
+            >
+              {getInitials(user.name)}
+            </div>
+
+            {menuOpen && (
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+                background: '#fff', border: '1px solid #e5e7eb',
+                borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+                minWidth: '180px', overflow: 'hidden', zIndex: 200,
+              }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
+                  <div style={{ fontWeight: 600, fontSize: '14px', color: '#111' }}>{user.name}</div>
+                  <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{user.email}</div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '10px 16px', background: 'none', border: 'none',
+                    fontSize: '14px', color: '#ef4444', cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={() => navigate('/login')}
+            style={{
+              background: '#2563eb', color: '#fff',
+              border: 'none', borderRadius: '7px',
+              padding: '7px 16px', fontSize: '14px', fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Sign in
+          </button>
+        )}
       </div>
 
       {/* ── Context / breadcrumb bar ── */}
@@ -175,15 +214,9 @@ const AppNavbar = () => {
           <button
             onClick={() => navigate('/companies')}
             style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: '13px',
-              color: '#374151',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: 0, fontSize: '13px', color: '#374151',
+              display: 'flex', alignItems: 'center', gap: '4px',
             }}
           >
             <span style={{ fontSize: '15px', color: '#9ca3af' }}>‹</span>

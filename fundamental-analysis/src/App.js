@@ -1,7 +1,12 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+
 import LandingPage from './components/LandingPage';
+import Login from './components/Login';
+import AuthCallback from './components/AuthCallback';
 import CompaniesList from './components/CompaniesList';
 import CompanyReports from './components/CompanyReports';
 import CompanyPage from './components/CompanyPage';
@@ -11,17 +16,21 @@ import CompanyFinancials from './components/CompanyFinancials';
 
 function App() {
   return (
-    <Router>
-      <AppNavbar />
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/companies" element={<CompaniesList />} /> 
-        <Route path="/companies/:ticker" element={<CompanyPage />} /> 
-        <Route path="/companies/:ticker/reports" element={<CompanyReports />} />       
-        <Route path="/report-details/:fileName" element={<ReportDetails />} />
-        <Route path="/financials/:ticker" element={<CompanyFinancials />} />
-      </Routes>
-    </Router>
+    <AuthProvider>
+      <Router>
+        <AppNavbar />
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/companies" element={<ProtectedRoute><CompaniesList /></ProtectedRoute>} />
+          <Route path="/companies/:ticker" element={<ProtectedRoute><CompanyPage /></ProtectedRoute>} />
+          <Route path="/companies/:ticker/reports" element={<ProtectedRoute><CompanyReports /></ProtectedRoute>} />
+          <Route path="/report-details/:fileName" element={<ProtectedRoute><ReportDetails /></ProtectedRoute>} />
+          <Route path="/financials/:ticker" element={<ProtectedRoute><CompanyFinancials /></ProtectedRoute>} />
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }
 
