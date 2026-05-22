@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import { Container, Card, Spinner, Alert, Nav } from 'react-bootstrap';
 import OverviewTab from './tabs/OverviewTab';
 import TrendsTab from './tabs/TrendsTab';
 import FinancialsTab from './tabs/FinancialsTab';
 import FilingsTab from './tabs/FilingsTab';
 import NewsTab from './tabs/NewsTab';
+import AnalysisTab from './tabs/AnalysisTab';
 
 function truncateToSentences(text, max = 3) {
   if (!text) return '';
@@ -15,12 +16,13 @@ function truncateToSentences(text, max = 3) {
 
 const CompanyPage = () => {
   const { ticker } = useParams();
+  const location = useLocation();
   const [company, setCompany] = useState(null);
   const [description, setDescription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [logoError, setLogoError] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(location.state?.defaultTab ?? 'overview');
 
   useEffect(() => {
     const fetchCompany = async () => {
@@ -123,7 +125,7 @@ const CompanyPage = () => {
         className="mb-4"
         style={{ borderBottom: '1px solid #dee2e6' }}
       >
-        {['overview', 'trends', 'financials', 'filings', 'news'].map((tab) => (
+        {['overview', 'trends', 'financials', 'filings', 'news', 'analysis'].map((tab) => (
           <Nav.Item key={tab}>
             <Nav.Link
               eventKey={tab}
@@ -146,6 +148,7 @@ const CompanyPage = () => {
       {activeTab === 'financials' && <FinancialsTab company={company} />}
       {activeTab === 'filings' && <FilingsTab company={company} />}
       {activeTab === 'news' && <NewsTab company={company} />}
+      {activeTab === 'analysis' && <AnalysisTab company={company} />}
 
     </Container>
   );

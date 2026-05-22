@@ -13,6 +13,7 @@ import CompanyPage from './components/CompanyPage';
 import AppNavbar from './components/Navbar';
 import ReportDetails from './components/ReportDetails';
 import CompanyFinancials from './components/CompanyFinancials';
+import NewAnalysisPage from './components/NewAnalysisPage';
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
           <Route path="/companies/:ticker/reports" element={<ProtectedRoute><CompanyReports /></ProtectedRoute>} />
           <Route path="/report-details/:fileName" element={<ProtectedRoute><ReportDetails /></ProtectedRoute>} />
           <Route path="/financials/:ticker" element={<ProtectedRoute><CompanyFinancials /></ProtectedRoute>} />
+          <Route path="/companies/:ticker/new-analysis" element={<ProtectedRoute><NewAnalysisPage /></ProtectedRoute>} />
         </Routes>
       </Router>
     </AuthProvider>
