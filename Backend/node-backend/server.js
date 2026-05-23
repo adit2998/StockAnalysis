@@ -12,6 +12,7 @@ const reportDetailsRouter = require('./routes/reportDetails');
 const financialsRouter = require('./routes/financials');
 const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
+const tierTemplatesRouter = require('./routes/tierTemplates');
 
 const app = express();
 
@@ -80,6 +81,7 @@ async function startServer() {
     app.use('/api/financials', financialsRouter(db));
     app.use('/api/auth', authRouter());
     app.use('/api/users', usersRouter(db));
+    app.use('/api/tier-templates', tierTemplatesRouter(db));
 
     const PORT = process.env.PORT || 5001;
     app.listen(PORT, () => {

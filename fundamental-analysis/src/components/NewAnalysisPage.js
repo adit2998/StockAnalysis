@@ -6,73 +6,6 @@ import { ChevronRight, ChevronDown } from 'lucide-react';
 const FORM_TYPES = ['10-K', '10-Q', 'DEF 14A'];
 const MAX_QUESTIONS = 10;
 
-const TIER_CONFIGS = [
-  {
-    tier: 1,
-    name: 'Quick scan',
-    description: 'High-level health check. Key metrics and immediate red flags.',
-    basePrompt:
-      'Provide a brief financial health check. Focus on key profitability metrics, balance sheet strength, and any immediate concerns. For each question below, provide a concise, data-backed answer.',
-    defaultQuestions: [
-      'What is the current profitability trend?',
-      'Are there any immediate financial red flags?',
-    ],
-  },
-  {
-    tier: 2,
-    name: 'Overview',
-    description: 'Broad financial overview. Revenue trends, margins, and key ratios.',
-    basePrompt:
-      'Provide a comprehensive financial overview. Analyze revenue trends, profitability margins, liquidity ratios, and capital structure. For each question below, provide a detailed, data-backed answer.',
-    defaultQuestions: [
-      'What are the revenue and earnings growth trends over the past 3 years?',
-      "How do the company's margins compare to industry benchmarks?",
-      'What is the current liquidity and solvency position?',
-    ],
-  },
-  {
-    tier: 3,
-    name: 'Standard',
-    description: 'Standard fundamental analysis. Business model, financials, and risks.',
-    basePrompt:
-      'Conduct a standard fundamental analysis covering the business model, financial performance, risk factors, and competitive positioning. For each question below, provide a thorough, evidence-based answer.',
-    defaultQuestions: [
-      "What is the company's core business model and competitive advantage?",
-      'How has financial performance evolved over the past 5 years?',
-      'What are the primary risk factors disclosed in recent filings?',
-      'How is the company positioned relative to its peers?',
-    ],
-  },
-  {
-    tier: 4,
-    name: 'Deep dive',
-    description: 'In-depth analysis. Segment breakdown, management commentary, and forward guidance.',
-    basePrompt:
-      "Perform an in-depth investment analysis examining business segments, management's strategic commentary, forward guidance, capital allocation decisions, and key financial drivers. Provide detailed, citation-backed answers for each question.",
-    defaultQuestions: [
-      'What does segment-level performance reveal about the business?',
-      "What is management's strategic outlook and key initiatives?",
-      'How has the company allocated capital and what are the returns?',
-      'What forward guidance has been provided and how credible is it?',
-      'What are the key financial drivers and how sustainable are they?',
-    ],
-  },
-  {
-    tier: 5,
-    name: 'Full research',
-    description: 'Comprehensive investment research. Valuation, catalysts, and investment thesis.',
-    basePrompt:
-      "Produce a comprehensive investment research report covering all material aspects: business quality, financial analysis, competitive dynamics, management assessment, risk/reward profile, valuation considerations, and investment thesis. Provide institutional-grade, citation-backed analysis for each question.",
-    defaultQuestions: [
-      'What is the quality and durability of the business model?',
-      'How do the financials reflect the underlying business performance?',
-      'What is the competitive landscape and the company\'s positioning?',
-      "How does management's track record compare to stated strategy?",
-      'What are the key catalysts and risks to the investment thesis?',
-    ],
-  },
-];
-
 function filingPeriodLabel(formType, filing) {
   const reportDate = filing['Report date'];
   if (!reportDate) return '—';
@@ -127,10 +60,11 @@ const NewAnalysisPage = () => {
   const company = location.state?.company;
 
   // Left panel
+  const [tierConfigs, setTierConfigs] = useState([]);
   const [selectedTier, setSelectedTier] = useState(1);
-  const tierConfig = TIER_CONFIGS.find(t => t.tier === selectedTier) ?? null;
-  const [questions, setQuestions] = useState(TIER_CONFIGS[0].defaultQuestions);
-  const [basePrompt, setBasePrompt] = useState(TIER_CONFIGS[0].basePrompt);
+  const tierConfig = tierConfigs.find(t => t.tier === selectedTier) ?? null;
+  const [questions, setQuestions] = useState([]);
+  const [basePrompt, setBasePrompt] = useState('');
   const [basePromptLocked, setBasePromptLocked] = useState(true);
   const [showBasePrompt, setShowBasePrompt] = useState(false);
   const [logoError, setLogoError] = useState(false);
@@ -146,6 +80,25 @@ const NewAnalysisPage = () => {
   const [selectedFilings, setSelectedFilings] = useState(new Set());
   // { fileName: Set<sectionKey> } = individual sections selected
   const [selectedSectionsByFile, setSelectedSectionsByFile] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTemplates = async () => {
+      try {
+        const res = await fetch(`${process.env.REACT_APP_API_URL}/api/tier-templates`);
+        const data = res.ok ? await res.json() : [];
+        if (!cancelled && data.length) {
+          setTierConfigs(data);
+          setQuestions([...data[0].defaultQuestions]);
+          setBasePrompt(data[0].basePrompt);
+        }
+      } catch {
+        // route returns fallback data so this only fires on a network failure
+      }
+    };
+    fetchTemplates();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,7 +139,7 @@ const NewAnalysisPage = () => {
   }, [filingsByType]);
 
   const handleTierSelect = (tier) => {
-    const config = TIER_CONFIGS.find(t => t.tier === tier);
+    const config = tierConfigs.find(t => t.tier === tier);
     if (!config) return;
     setSelectedTier(tier);
     setQuestions([...config.defaultQuestions]);
@@ -326,7 +279,7 @@ const NewAnalysisPage = () => {
               ANALYSIS DEPTH
             </div>
             <div className="d-flex gap-2 flex-wrap">
-              {TIER_CONFIGS.map(({ tier, name }) => {
+              {tierConfigs.map(({ tier, name }) => {
                 const active = selectedTier === tier;
                 return (
                   <button
