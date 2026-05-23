@@ -346,5 +346,5 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
     save_financial_statements(ticker)
 
 
-form_types = [FormType.TEN_K]
-process_company('AAPL', form_types, max_summaries=0)
+form_types = [FormType.DEF_14A]
+process_company('NVDA', form_types, max_summaries=1)

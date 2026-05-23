@@ -6,6 +6,12 @@ import { ChevronRight, ChevronDown } from 'lucide-react';
 const FORM_TYPES = ['10-K', '10-Q', 'DEF 14A'];
 const MAX_QUESTIONS = 10;
 
+const FINANCIAL_STATEMENTS = [
+  { key: 'income', label: 'Income Statement' },
+  { key: 'balance', label: 'Balance Sheet' },
+  { key: 'cashflow', label: 'Cash Flow Statement' },
+];
+
 function filingPeriodLabel(formType, filing) {
   const reportDate = filing['Report date'];
   if (!reportDate) return '—';
@@ -80,6 +86,13 @@ const NewAnalysisPage = () => {
   const [selectedFilings, setSelectedFilings] = useState(new Set());
   // { fileName: Set<sectionKey> } = individual sections selected
   const [selectedSectionsByFile, setSelectedSectionsByFile] = useState({});
+
+  // Financial reports state
+  const [expandedReports, setExpandedReports] = useState(false);
+  const [expandedStatements, setExpandedStatements] = useState(new Set());
+  const [selectedReportPeriods, setSelectedReportPeriods] = useState(new Set());
+  const [reportAvailability, setReportAvailability] = useState(null);
+  const [loadingReportAvailability, setLoadingReportAvailability] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +205,50 @@ const NewAnalysisPage = () => {
     });
   }, []);
 
+  const toggleReportsExpanded = useCallback(async () => {
+    const next = !expandedReports;
+    setExpandedReports(next);
+    if (next && reportAvailability === null && !loadingReportAvailability) {
+      setLoadingReportAvailability(true);
+      const stmts = ['income', 'balance', 'cashflow'];
+      const periods = ['annual', 'quarterly'];
+      const availability = {};
+      await Promise.all(
+        stmts.flatMap(stmt =>
+          periods.map(async (period) => {
+            try {
+              const res = await fetch(
+                `${process.env.REACT_APP_API_URL}/api/financials/${ticker}/statements?statement=${stmt}&period=${period}`
+              );
+              availability[`${stmt}_${period}`] = res.ok;
+            } catch {
+              availability[`${stmt}_${period}`] = false;
+            }
+          })
+        )
+      );
+      setReportAvailability(availability);
+      setLoadingReportAvailability(false);
+    }
+  }, [expandedReports, reportAvailability, loadingReportAvailability, ticker]);
+
+  const toggleStatementExpanded = useCallback((stmtKey) => {
+    setExpandedStatements(prev => {
+      const next = new Set(prev);
+      if (next.has(stmtKey)) { next.delete(stmtKey); } else { next.add(stmtKey); }
+      return next;
+    });
+  }, []);
+
+  const toggleReportPeriod = useCallback((stmtKey, period) => {
+    const key = `${stmtKey}_${period}`;
+    setSelectedReportPeriods(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      return next;
+    });
+  }, []);
+
   const getFilingCheckState = useCallback((fileName) => {
     if (selectedFilings.has(fileName)) return 'all';
     const sections = selectedSectionsByFile[fileName];
@@ -245,12 +302,24 @@ const NewAnalysisPage = () => {
         });
       }
     }
+    for (const key of selectedReportPeriods) {
+      const [stmtKey, period] = key.split('_');
+      const stmt = FINANCIAL_STATEMENTS.find(s => s.key === stmtKey);
+      if (stmt) {
+        tags.push({
+          key: `report_${key}`,
+          formType: 'Reports',
+          label: `${ticker} — ${stmt.label} (${period === 'annual' ? 'Annual' : 'Quarterly'})`,
+        });
+      }
+    }
     return tags;
-  }, [selectedFilings, selectedSectionsByFile, combinedFilings, ticker]);
+  }, [selectedFilings, selectedSectionsByFile, combinedFilings, ticker, selectedReportPeriods]);
 
   const selectedCount =
     selectedFilings.size +
-    Object.values(selectedSectionsByFile).reduce((sum, s) => sum + s.size, 0);
+    Object.values(selectedSectionsByFile).reduce((sum, s) => sum + s.size, 0) +
+    selectedReportPeriods.size;
 
   const logoUrl = `https://financialmodelingprep.com/image-stock/${ticker}.png`;
 
@@ -649,6 +718,104 @@ const NewAnalysisPage = () => {
                 })
               )}
 
+              {/* Reports section */}
+              <div style={{ borderBottom: '1px solid #e5e7eb' }}>
+                <button
+                  onClick={toggleReportsExpanded}
+                  style={{
+                    width: '100%', background: '#f9fafb', border: 'none',
+                    padding: '0.5rem 1rem 0.5rem 2rem',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  {expandedReports
+                    ? <ChevronDown size={13} style={{ color: '#6b7280', flexShrink: 0 }} />
+                    : <ChevronRight size={13} style={{ color: '#6b7280', flexShrink: 0 }} />}
+                  <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111', flex: 1 }}>
+                    Reports
+                  </span>
+                  {selectedReportPeriods.size > 0 && (
+                    <span style={{
+                      padding: '0.05rem 0.4rem', borderRadius: 10,
+                      background: '#dbeafe', color: '#1d4ed8',
+                      fontSize: '0.7rem', fontWeight: 600,
+                    }}>
+                      {selectedReportPeriods.size}
+                    </span>
+                  )}
+                </button>
+
+                {expandedReports && (
+                  loadingReportAvailability ? (
+                    <div className="d-flex justify-content-center p-3">
+                      <Spinner animation="border" size="sm" />
+                    </div>
+                  ) : (
+                    FINANCIAL_STATEMENTS.map(({ key: stmtKey, label: stmtLabel }) => {
+                      const hasAnnual = reportAvailability?.[`${stmtKey}_annual`];
+                      const hasQuarterly = reportAvailability?.[`${stmtKey}_quarterly`];
+                      if (!hasAnnual && !hasQuarterly) return null;
+                      const isStmtExpanded = expandedStatements.has(stmtKey);
+
+                      return (
+                        <div key={stmtKey} style={{ borderTop: '1px solid #f3f4f6' }}>
+                          <button
+                            onClick={() => toggleStatementExpanded(stmtKey)}
+                            style={{
+                              width: '100%', background: 'none', border: 'none',
+                              padding: '0.45rem 1rem 0.45rem 3rem',
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              cursor: 'pointer', textAlign: 'left',
+                            }}
+                          >
+                            {isStmtExpanded
+                              ? <ChevronDown size={12} style={{ color: '#6b7280', flexShrink: 0 }} />
+                              : <ChevronRight size={12} style={{ color: '#6b7280', flexShrink: 0 }} />}
+                            <span style={{ fontSize: '0.875rem', fontWeight: 500, color: '#111' }}>
+                              {stmtLabel}
+                            </span>
+                          </button>
+
+                          {isStmtExpanded && (
+                            <div style={{ background: '#f9fafb', borderTop: '1px solid #f0f0f0' }}>
+                              {hasAnnual && (
+                                <div
+                                  className="d-flex align-items-center gap-2"
+                                  style={{ padding: '0.32rem 1rem 0.32rem 4.5rem' }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedReportPeriods.has(`${stmtKey}_annual`)}
+                                    onChange={() => toggleReportPeriod(stmtKey, 'annual')}
+                                    style={{ flexShrink: 0, cursor: 'pointer', accentColor: '#2563eb' }}
+                                  />
+                                  <span style={{ fontSize: '0.82rem', color: '#333' }}>Annual</span>
+                                </div>
+                              )}
+                              {hasQuarterly && (
+                                <div
+                                  className="d-flex align-items-center gap-2"
+                                  style={{ padding: '0.32rem 1rem 0.32rem 4.5rem' }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedReportPeriods.has(`${stmtKey}_quarterly`)}
+                                    onChange={() => toggleReportPeriod(stmtKey, 'quarterly')}
+                                    style={{ flexShrink: 0, cursor: 'pointer', accentColor: '#2563eb' }}
+                                  />
+                                  <span style={{ fontSize: '0.82rem', color: '#333' }}>Quarterly</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )
+                )}
+              </div>
+
               {/* Selected sources summary */}
               {selectedCount > 0 && (
                 <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid #e5e7eb', background: '#f9fafb' }}>
@@ -666,7 +833,9 @@ const NewAnalysisPage = () => {
                           fontSize: '0.72rem', color: '#374151',
                         }}
                       >
-                        <span style={BADGE_STYLE}>{tag.formType === 'DEF 14A' ? 'Proxy' : tag.formType}</span>
+                        <span style={BADGE_STYLE}>
+                          {tag.formType === 'DEF 14A' ? 'Proxy' : tag.formType}
+                        </span>
                         <span>{tag.label}</span>
                       </div>
                     ))}
