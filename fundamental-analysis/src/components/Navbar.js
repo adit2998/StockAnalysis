@@ -169,11 +169,24 @@ const AppNavbar = () => {
                   <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{user.email}</div>
                 </div>
                 <button
+                  onClick={() => { setMenuOpen(false); navigate('/profile'); }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '10px 16px', background: 'none', border: 'none',
+                    fontSize: '14px', color: '#374151', cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  Profile
+                </button>
+                <button
                   onClick={handleLogout}
                   style={{
                     display: 'block', width: '100%', textAlign: 'left',
                     padding: '10px 16px', background: 'none', border: 'none',
                     fontSize: '14px', color: '#ef4444', cursor: 'pointer',
+                    borderTop: '1px solid #f0f0f0',
                   }}
                   onMouseEnter={e => e.currentTarget.style.background = '#fef2f2'}
                   onMouseLeave={e => e.currentTarget.style.background = 'none'}
