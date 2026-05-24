@@ -1,0 +1,268 @@
+const Anthropic = require('@anthropic-ai/sdk');
+const { ObjectId } = require('mongodb');
+const logger = require('../utils/logger');
+
+// Pricing for claude-sonnet-4-6 in USD per 1M tokens
+const INPUT_COST_PER_M_USD = 3.00;
+const OUTPUT_COST_PER_M_USD = 15.00;
+
+// Fixed USD → GBP conversion rate (update via env if needed)
+const USD_TO_GBP = parseFloat(process.env.USD_TO_GBP_RATE || '0.79');
+
+// Maps source key to collection name and display label
+const STATEMENT_MAP = {
+  income:   { collection: 'income_statements',    label: 'Income Statement' },
+  balance:  { collection: 'balance_sheets',        label: 'Balance Sheet' },
+  cashflow: { collection: 'cash_flow_statements',  label: 'Cash Flow Statement' },
+};
+
+// 1 token ≈ 4 characters (standard Anthropic approximation)
+function charsToTokens(charCount) {
+  return Math.ceil(charCount / 4);
+}
+
+function calcCostGBP(inputTokens, outputTokens) {
+  const costUSD =
+    (inputTokens  / 1_000_000) * INPUT_COST_PER_M_USD +
+    (outputTokens / 1_000_000) * OUTPUT_COST_PER_M_USD;
+  return parseFloat((costUSD * USD_TO_GBP).toFixed(6));
+}
+
+// Fetches all selected source content from MongoDB and returns it as a single string.
+// sources = { filings: [{fileName, sections: null|[...]}], reportPeriods: ['income_annual', ...] }
+async function fetchSourceContent(db, ticker, sources) {
+  const parts = [];
+
+  for (const filing of (sources.filings || [])) {
+    try {
+      // Prefer pre-summarised content; fall back to raw sections
+      let doc = await db.collection('report_summaries').findOne({ _id: filing.fileName });
+      if (!doc) doc = await db.collection('report_sections').findOne({ _id: filing.fileName });
+      if (!doc?.sections) {
+        logger.warn('No sections found for filing', { fileName: filing.fileName });
+        continue;
+      }
+
+      const sectionsToInclude = filing.sections === null
+        ? Object.keys(doc.sections)                      // whole filing
+        : filing.sections;                               // specific sections only
+
+      for (const name of sectionsToInclude) {
+        const content = doc.sections[name];
+        if (typeof content === 'string' && content.trim()) {
+          parts.push(`=== ${name} ===\n${content}`);
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to fetch filing content', { fileName: filing.fileName, error: err.message });
+    }
+  }
+
+  for (const periodKey of (sources.reportPeriods || [])) {
+    const [stmtKey, period] = periodKey.split('_');
+    const mapping = STATEMENT_MAP[stmtKey];
+    if (!mapping) continue;
+
+    try {
+      const doc = await db.collection(mapping.collection).findOne(
+        { ticker: ticker.toUpperCase(), period_type: period },
+        { projection: { _id: 0 } }
+      );
+      if (doc) {
+        const label = `${mapping.label} (${period === 'annual' ? 'Annual' : 'Quarterly'})`;
+        parts.push(`=== ${label} ===\n${JSON.stringify(doc, null, 2)}`);
+      }
+    } catch (err) {
+      logger.warn('Failed to fetch financial statement', { stmtKey, period, ticker, error: err.message });
+    }
+  }
+
+  return parts.join('\n\n');
+}
+
+// Fetches source content character counts WITHOUT loading full content (for fast estimation).
+// For financial statements we use a rough size estimate since they vary by company.
+async function getSourceCharCounts(db, ticker, sources) {
+  let totalChars = 0;
+
+  for (const filing of (sources.filings || [])) {
+    try {
+      let doc = await db.collection('report_summaries').findOne({ _id: filing.fileName });
+      if (!doc) doc = await db.collection('report_sections').findOne({ _id: filing.fileName });
+      if (!doc?.sections) continue;
+
+      const sectionsToCount = filing.sections === null
+        ? Object.values(doc.sections)
+        : filing.sections.map(s => doc.sections[s]).filter(Boolean);
+
+      for (const content of sectionsToCount) {
+        totalChars += typeof content === 'string' ? content.length : 0;
+      }
+    } catch { /* silently skip on error */ }
+  }
+
+  // Financial statements: average ~15 000 chars each (conservative estimate)
+  totalChars += (sources.reportPeriods || []).length * 15_000;
+
+  return totalChars;
+}
+
+// Estimate cost before running. Returns { estimatedCostGBP, inputTokensEstimate, outputTokensEstimate, sourceChars }
+async function estimateCost(db, ticker, sources, questions) {
+  const sourceChars   = await getSourceCharCounts(db, ticker, sources);
+  const promptOverhead = 2_000;                               // system prompt + boilerplate
+  const inputTokens   = charsToTokens(sourceChars + promptOverhead);
+  const outputTokens  = (questions?.length || 1) * 500;      // ~500 tokens per answer
+
+  return {
+    estimatedCostGBP:    calcCostGBP(inputTokens, outputTokens),
+    inputTokensEstimate:  inputTokens,
+    outputTokensEstimate: outputTokens,
+    sourceChars,
+  };
+}
+
+// Main async analysis runner. Called fire-and-forget after the POST responds.
+async function runAnalysis(db, analysisId, userId, ticker, companyName, tierName, questions, basePrompt, sources) {
+  const logCtx = { analysisId: analysisId.toString(), ticker, userId: userId.toString() };
+
+  try {
+    logger.info('Analysis starting', logCtx);
+
+    await db.collection('generated_reports').updateOne(
+      { _id: analysisId },
+      { $set: { status: 'running' } }
+    );
+
+    // ── Fetch source content ──────────────────────────────────────────────────
+    logger.info('Fetching source content from DB', logCtx);
+    const sourceContent = await fetchSourceContent(db, ticker, sources);
+
+    if (!sourceContent.trim()) {
+      throw new Error('No source content found for the selected sources. Make sure the filings have been processed.');
+    }
+
+    logger.info('Source content fetched', { ...logCtx, chars: sourceContent.length });
+
+    // ── Build prompt ──────────────────────────────────────────────────────────
+    const numberedQuestions = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+
+    const systemPrompt = [
+      basePrompt,
+      '',
+      'IMPORTANT OUTPUT FORMAT: Your entire response must be a single valid JSON array.',
+      'Start with [ and end with ]. Do not include markdown, code blocks, or any other text.',
+      'Each element must have exactly two fields:',
+      '  "q": the exact question text',
+      '  "a": your detailed, evidence-based answer',
+    ].join('\n');
+
+    const userMessage = [
+      `You are analyzing ${companyName} (${ticker}).`,
+      '',
+      '=== SOURCE DATA ===',
+      sourceContent,
+      '',
+      '=== QUESTIONS ===',
+      numberedQuestions,
+      '',
+      'Return a JSON array with one object per question: [{"q": "...", "a": "..."}, ...]',
+    ].join('\n');
+
+    // ── Call Anthropic ────────────────────────────────────────────────────────
+    logger.info('Calling Anthropic API', {
+      ...logCtx,
+      estimatedInputTokens: charsToTokens(systemPrompt.length + userMessage.length),
+    });
+
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const response = await anthropic.messages.create({
+      model:      'claude-sonnet-4-6',
+      max_tokens: 8192,
+      system:     systemPrompt,
+      messages:   [{ role: 'user', content: userMessage }],
+    });
+
+    const rawText = response.content[0].text;
+    const usage   = response.usage;
+
+    logger.info('Anthropic API call complete', {
+      ...logCtx,
+      inputTokens:  usage.input_tokens,
+      outputTokens: usage.output_tokens,
+    });
+
+    // ── Parse JSON response ───────────────────────────────────────────────────
+    let report;
+    try {
+      // Strip markdown code fences if the model wrapped the JSON anyway
+      const cleaned = rawText
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/, '')
+        .trim();
+      report = JSON.parse(cleaned);
+      if (!Array.isArray(report)) throw new Error('Response is not a JSON array');
+    } catch (parseErr) {
+      logger.error('JSON parse failed', { ...logCtx, preview: rawText.slice(0, 300) });
+      throw new Error(`AI returned invalid JSON: ${parseErr.message}`);
+    }
+
+    // ── Persist results ───────────────────────────────────────────────────────
+    const actualCostGBP = calcCostGBP(usage.input_tokens, usage.output_tokens);
+
+    await db.collection('generated_reports').updateOne(
+      { _id: analysisId },
+      {
+        $set: {
+          status: 'completed',
+          report,
+          actualCostGBP,
+          tokenUsage:  { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens },
+          completedAt: new Date(),
+        },
+      }
+    );
+
+    logger.info('Analysis saved', { ...logCtx, actualCostGBP, answers: report.length });
+
+    // ── Update user spend ─────────────────────────────────────────────────────
+    const userObjId = new ObjectId(userId);
+
+    await db.collection('users').updateOne(
+      { _id: userObjId },
+      { $inc: { total_spend_gbp: actualCostGBP } }
+    );
+
+    // Update or insert the current month's entry in the monthly_spend array
+    const now   = new Date();
+    const year  = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    const userDoc = await db.collection('users').findOne({ _id: userObjId });
+    const existingMonth = (userDoc?.monthly_spend || []).find(
+      e => e.year === year && e.month === month
+    );
+
+    if (existingMonth) {
+      await db.collection('users').updateOne(
+        { _id: userObjId, 'monthly_spend.year': year, 'monthly_spend.month': month },
+        { $inc: { 'monthly_spend.$.amount': actualCostGBP } }
+      );
+    } else {
+      await db.collection('users').updateOne(
+        { _id: userObjId },
+        { $push: { monthly_spend: { year, month, amount: actualCostGBP } } }
+      );
+    }
+
+  } catch (err) {
+    logger.error('Analysis failed', { ...logCtx, error: err.message, stack: err.stack });
+    await db.collection('generated_reports').updateOne(
+      { _id: analysisId },
+      { $set: { status: 'failed', error: err.message } }
+    );
+  }
+}
+
+module.exports = { runAnalysis, estimateCost };

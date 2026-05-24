@@ -23,6 +23,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Runtime logs
+logs/
+
 # Ignore Python bytecode
 __pycache__
 *.pyc
