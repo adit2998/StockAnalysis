@@ -14,11 +14,25 @@ function truncateToSentences(text, max = 3) {
   return sentences.slice(0, max).join(' ').trim();
 }
 
+function formatPrice(value) {
+  if (value == null) return '--';
+  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatMarketCap(value) {
+  if (value == null) return '--';
+  if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+  return `$${value.toLocaleString()}`;
+}
+
 const CompanyPage = () => {
   const { ticker } = useParams();
   const location = useLocation();
   const [company, setCompany] = useState(null);
   const [description, setDescription] = useState(null);
+  const [stockQuote, setStockQuote] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [logoError, setLogoError] = useState(false);
@@ -54,6 +68,20 @@ const CompanyPage = () => {
     };
 
     fetchDescription();
+  }, [ticker]);
+
+  useEffect(() => {
+    const fetchQuote = async () => {
+      try {
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/stock/${ticker}/quote`);
+        if (!response.ok) return;
+        const data = await response.json();
+        setStockQuote(data);
+      } catch {
+        // quote is non-critical, fail silently
+      }
+    };
+    fetchQuote();
   }, [ticker]);
 
   if (loading) return <Spinner animation="border" className="m-4" />;
@@ -92,16 +120,28 @@ const CompanyPage = () => {
               <div>
                 <div style={{ fontSize: '1.75rem', fontWeight: 700, lineHeight: 1.2 }}>{company.name}</div>
                 <div className="text-muted mt-1" style={{ fontSize: '0.92rem' }}>
-                  --: {company.ticker}&nbsp;·&nbsp;{company.sicDescription}&nbsp;·&nbsp;--
+                  {stockQuote?.exchange ?? '--'}: {company.ticker}&nbsp;·&nbsp;{company.sicDescription}
                 </div>
               </div>
             </div>
 
             {/* Right: price block */}
             <div className="text-end">
-              <div style={{ fontSize: '2rem', fontWeight: 700, lineHeight: 1.1 }}>$--</div>
-              <div style={{ color: '#28a745', fontWeight: 600, fontSize: '1rem' }}>+$-- +--% </div>
-              <div className="text-muted" style={{ fontSize: '0.85rem' }}>Market cap $--</div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, lineHeight: 1.1 }}>
+                {stockQuote ? `$${formatPrice(stockQuote.price)}` : '$--'}
+              </div>
+              <div style={{
+                color: stockQuote ? (stockQuote.change >= 0 ? '#28a745' : '#dc3545') : '#6c757d',
+                fontWeight: 600,
+                fontSize: '1rem',
+              }}>
+                {stockQuote
+                  ? `${stockQuote.change >= 0 ? '+' : ''}$${formatPrice(Math.abs(stockQuote.change))} ${stockQuote.changePercent >= 0 ? '+' : ''}${stockQuote.changePercent.toFixed(2)}%`
+                  : '+$-- +--%'}
+              </div>
+              <div className="text-muted" style={{ fontSize: '0.85rem' }}>
+                Market cap {stockQuote ? formatMarketCap(stockQuote.marketCap) : '$--'}
+              </div>
             </div>
           </div>
 
