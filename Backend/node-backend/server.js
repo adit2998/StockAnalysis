@@ -6,6 +6,8 @@ const session = require('express-session');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 
+const logger = require('./utils/logger');
+
 const companiesRouter = require('./routes/companies');
 const companyReportsRouter = require('./routes/companyReports');
 const reportDetailsRouter = require('./routes/reportDetails');
@@ -13,6 +15,7 @@ const financialsRouter = require('./routes/financials');
 const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
 const tierTemplatesRouter = require('./routes/tierTemplates');
+const analysesRouter = require('./routes/analyses');
 
 const app = express();
 
@@ -39,7 +42,7 @@ const client = new MongoClient(uri);
 async function startServer() {
   try {
     await client.connect();
-    console.log("Connected to MongoDB");
+    logger.info('Connected to MongoDB');
 
     const db = client.db(process.env.DB_NAME);
 
@@ -60,7 +63,12 @@ async function startServer() {
                 email: profile.emails[0].value,
                 name: profile.displayName,
               },
-              $setOnInsert: { companies: [] },
+              $setOnInsert: {
+                companies: [],
+                generated_reports: [],
+                total_spend_gbp: 0,
+                monthly_spend: [],
+              },
             },
             { upsert: true, returnDocument: 'after' }
           );
@@ -82,14 +90,15 @@ async function startServer() {
     app.use('/api/auth', authRouter());
     app.use('/api/users', usersRouter(db));
     app.use('/api/tier-templates', tierTemplatesRouter(db));
+    app.use('/api/analyses', analysesRouter(db));
 
     const PORT = process.env.PORT || 5001;
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      logger.info(`Server running on port ${PORT}`);
     });
 
   } catch (err) {
-    console.error("Failed to start server:", err);
+    logger.error('Failed to start server', { error: err.message, stack: err.stack });
   }
 }
 
