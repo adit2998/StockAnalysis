@@ -175,25 +175,49 @@ const FilingsTab = ({ company }) => {
                       Filed {filedDate(filing['Filing date'])}
                     </div>
                     {isSelected && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/report-details/${encodeURIComponent(filing['File name'])}`);
-                        }}
-                        style={{
-                          marginTop: '0.5rem',
-                          padding: '0.2rem 0.75rem',
-                          borderRadius: 6,
-                          border: '1px solid #ccc',
-                          background: '#fff',
-                          fontSize: '0.78rem',
-                          fontWeight: 500,
-                          cursor: 'pointer',
-                          color: '#333',
-                        }}
-                      >
-                        Read →
-                      </button>
+                      <div className="d-flex gap-1" style={{ marginTop: '0.5rem' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/report-details/${encodeURIComponent(filing['File name'])}`);
+                          }}
+                          style={{
+                            padding: '0.2rem 0.75rem',
+                            borderRadius: 6,
+                            border: '1px solid #ccc',
+                            background: '#fff',
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
+                            cursor: 'pointer',
+                            color: '#333',
+                          }}
+                        >
+                          Read →
+                        </button>
+                        {filing.url && (
+                          <a
+                            href={filing.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              padding: '0.2rem 0.75rem',
+                              borderRadius: 6,
+                              border: '1px solid #ccc',
+                              background: '#fff',
+                              fontSize: '0.78rem',
+                              fontWeight: 500,
+                              cursor: 'pointer',
+                              color: '#333',
+                              textDecoration: 'none',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                            }}
+                          >
+                            SEC ↗
+                          </a>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -285,6 +309,16 @@ const FilingsTab = ({ company }) => {
                   >
                     Open full document →
                   </Button>
+                  {selectedFiling.url && (
+                    <a
+                      href={selectedFiling.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ fontSize: '0.85rem', color: '#555', textDecoration: 'none' }}
+                    >
+                      View on SEC ↗
+                    </a>
+                  )}
                   <span style={{ fontSize: '0.82rem', color: '#bbb' }}>or select any section to read</span>
                 </div>
               </>
