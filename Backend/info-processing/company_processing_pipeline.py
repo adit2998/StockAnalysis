@@ -346,5 +346,5 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
     save_financial_statements(ticker)
 
 
-form_types = [FormType.TEN_Q]
-process_company('GOOG', form_types, max_summaries=0)
+form_types = [FormType.TEN_K]
+process_company('AMD', form_types, max_summaries=0)
