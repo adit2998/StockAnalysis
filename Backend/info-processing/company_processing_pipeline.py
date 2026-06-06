@@ -347,4 +347,4 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
 
 
 form_types = [FormType.TEN_K]
-process_company('AMD', form_types, max_summaries=0)
+process_company('AAPL', form_types, max_summaries=0)

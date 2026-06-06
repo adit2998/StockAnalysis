@@ -13,9 +13,14 @@ Command to start/stop mongodb locally
 - To process a company, run python company_processing_pipeline.py 
 In company_processing_pipeline.py, add the ticker in the parameter that you want to process
 
-If you want to run it and save in local docker, run this:
+If you want to run it and save in local, run this:
 `ENV=local python company_processing_pipeline.py`
 (Since it needs to pick up from .env.local)
+
+If you want to run it and save in minikube's mongo, run this:
+`python company_processing_pipeline.py`
+Just make sure that the port forwarding for mongo is running:
+`kubectl port-forward <pod-name> 27017:27017`
 
 
 - To build the node docker container:
@@ -125,31 +130,67 @@ To use the Kubernetes set up:
 1. Start minikube
 `minikube start --driver=docker`
 
+Check status
+`minikube status`
+`kubectl get nodes`
+
+Minikube has its own browser-based dashboard you can open any time with:
+`minikube dashboard`
+
 2. — Point terminal at minikube's Docker and build images
 `eval $(minikube docker-env)`
 `docker compose build frontend server`
 
 3. — Apply all Kubernetes manifests
+
+# Secrets: loaded from *.local.yaml files which are gitignored and not committed.
+# Copy the relevant *.yaml file, name it *.local.yaml, and fill in your real values.
+kubectl apply -f k8s/mongo-secret.local.yaml
+kubectl apply -f k8s/server-secret.local.yaml
+
+# Everything else is safe to commit and apply as-is.
 kubectl apply -f k8s/mongo-pv.yaml
 kubectl apply -f k8s/mongo-pvc.yaml
 kubectl apply -f k8s/mongo-deployment.yaml
 kubectl apply -f k8s/mongo-service.yaml
-kubectl apply -f k8s/server-secret.yaml
 kubectl apply -f k8s/server-deployment.yaml
 kubectl apply -f k8s/server-service.yaml
 kubectl apply -f k8s/frontend-secret.yaml
 kubectl apply -f k8s/frontend-deployment.yaml
 kubectl apply -f k8s/frontend-service.yaml
+kubectl apply -f k8s/mongo-express-deployment.yaml
+kubectl apply -f k8s/mongo-express-service.yaml
+
+
+If code changed and you want to restart and create new pods with new code, run this:
+`kubectl rollout restart deployment/frontend deployment/server`
+kubectl apply is only needed when you change the manifest itself
+
+To see that the pod is using the latest image, run:
+`kubectl describe pod <pod-name> | grep "Image ID"`
+
+And this id should match the id of the image when you run:
+`docker images`
 
 4. — Wait for all Pods to be running
 `kubectl get pods --watch`
 
 5. — Open port-forwards (each in its own terminal tab)
 Frontend
-`kubectl port-forward <port-name> 3000:3000`
+`kubectl port-forward <pod-name> 3000:3000`
 
 Backend
-`kubectl port-forward <port-name> 5001:5001`
+`kubectl port-forward <pod-name> 5001:5001`
 
 Leave the Mongo on to run the processing from python
-`kubectl port-forward <port-name> 27017:27017`
+`kubectl port-forward <pod-name> 27017:27017`
+
+
+Analyzing Mongo
+To analyze what's inside the mogo for Minikube:
+`kubectl exec -it mongo-6db5c45b4b-zzjnd -- mongosh -u admin -p secret --authenticationDatabase admin`
+
+Open port forwarding for mongo dashboard:
+`kubectl port-forward <pod-name> 8081:8081`
+Then open http://localhost:8081 in your browser. You'll get a UI to browse collections, run queries, and inspect documents.
+This is a dev-only tool — don't deploy it to production without auth enabled.

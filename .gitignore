@@ -32,3 +32,6 @@ __pycache__
 
 # Scratch folder
 scratch/
+
+# Local k8s secrets (never commit real values)
+k8s/*.local.yaml
