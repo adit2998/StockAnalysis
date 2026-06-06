@@ -1,196 +1,565 @@
-Project for stock analysis
+# DeepVal — Stock Analysis Platform
 
+A full-stack web application for analyzing publicly traded companies using SEC filings, financial data, and AI-powered research. Combines Claude AI with real-time market data and SEC EDGAR filings to produce institutional-quality investment analysis.
 
-Command to start/stop mongodb locally
+---
 
-`brew services start mongodb/brew/mongodb-community`
+## Table of Contents
 
-`brew services stop mongodb/brew/mongodb-community`
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Environment Variables](#environment-variables)
+- [Running Locally (No Docker)](#running-locally-no-docker)
+- [Running with Docker Compose](#running-with-docker-compose)
+- [Running on Kubernetes (Minikube)](#running-on-kubernetes-minikube)
+- [Processing Company Data](#processing-company-data)
+- [Useful Commands Reference](#useful-commands-reference)
 
+---
 
-- Added backend for processing
+## Tech Stack
 
-- To process a company, run python company_processing_pipeline.py 
-In company_processing_pipeline.py, add the ticker in the parameter that you want to process
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, React Router 7, Bootstrap 5, Recharts |
+| Backend API | Node.js, Express 5 |
+| Data Pipeline | Python 3, pandas, PyMuPDF, yfinance |
+| Database | MongoDB 7 (GridFS for PDFs) |
+| AI | Anthropic Claude (claude-sonnet-4-6) |
+| Auth | Google OAuth 2.0 + JWT |
+| Market Data | Yahoo Finance, Finnhub |
+| DevOps | Docker, Docker Compose, Kubernetes (Minikube) |
 
-If you want to run it and save in local, run this:
-`ENV=local python company_processing_pipeline.py`
-(Since it needs to pick up from .env.local)
+---
 
-If you want to run it and save in minikube's mongo, run this:
-`python company_processing_pipeline.py`
-Just make sure that the port forwarding for mongo is running:
-`kubectl port-forward <pod-name> 27017:27017`
+## Project Structure
 
+```
+StockAnalysis/
+├── ReadMe.md
+├── DOCUMENTATION.md          ← Full technical documentation
+├── docker-compose.yml
+│
+├── Backend/
+│   ├── node-backend/         ← Express REST API (port 5001)
+│   │   ├── server.js
+│   │   ├── routes/
+│   │   ├── services/
+│   │   ├── middleware/
+│   │   └── utils/
+│   │
+│   └── info-processing/      ← Python data ingestion pipeline
+│       ├── company_processing_pipeline.py
+│       ├── sec_api_utils.py
+│       ├── extractors.py
+│       ├── process_reports.py
+│       ├── create_dataframe.py
+│       ├── save_reports_info.py
+│       └── config.py
+│
+├── fundamental-analysis/     ← React frontend (port 3000)
+│   └── src/
+│       ├── App.js
+│       ├── context/
+│       └── components/
+│
+└── k8s/                      ← Kubernetes manifests
+```
 
-- To build the node docker container:
- `docker build -t stock-backend .`
+---
 
-- To run the node docker container:
- `docker run -d -p 5001:5001 --name stock-backend-container --env-file .env stock-backend`
+## Prerequisites
 
+Install the following before proceeding:
 
-- To start all the containers, run the compose file (make sure the minikube container is not running - minikube stop):
- `docker-compose up --build`
+- **Node.js** 18+ and npm
+- **Python** 3.9+
+- **MongoDB Community** (for local dev without Docker)
+- **Docker Desktop** (for Docker Compose and Kubernetes)
+- **Minikube** (for Kubernetes only)
+- **kubectl** (for Kubernetes only)
 
-- To clean up and rebuild:
- `docker-compose down`
- `docker-compose up --build`
+Install Python dependencies:
 
-- Two flows possible: one with local development and one with containers
- The .env.local file should take care of the local. 
- For node to pick up from local mongo, run the brew services start command. 
- Run this command now to start node locally:
- `NODE_ENV=local node server.js`
- Run the front end as usual:
- `npm start`
+```bash
+cd Backend/info-processing
+pip install pymongo pandas anthropic weasyprint yfinance PyMuPDF python-dotenv requests
+```
 
- But if running node from a container, stop the brew services since mongo port 27017 will cause issues. 
+Install Node dependencies:
 
- For running the python file processing function from local, run this:
- `ENV=local python company_processing_pipeline.py`
+```bash
+cd Backend/node-backend
+npm install
 
- Else if docker containers are up, simply run this:
- `python company_processing_pipeline.py`
+cd ../../fundamental-analysis
+npm install
+```
 
+---
 
-- Minikube
+## Environment Variables
 
-Minikube is a tool that is simulating the Kubernetes architecture.
-It runs as a container on Docker ()
+### Backend (`Backend/node-backend/.env` and `.env.local`)
 
-To Point your terminal at minikube's Docker
-Run this:
-`eval $(minikube docker-env)`
+`.env` is used in Docker/production. `.env.local` is used when running locally (`NODE_ENV=local`).
 
-What does this do? It sets some environment variables in your terminal session that redirect all docker commands to talk to minikube's Docker daemon instead of your Mac's. It's temporary — it only affects the current terminal window.
+```env
+PORT=5001
+DB_NAME=stocks_data
+MONGO_URI=mongodb://admin:secret@localhost:27017/stockanalysis?authSource=admin
+FRONTEND_URL=http://localhost:3000
+JWT_SECRET=your-secret-key-here
+GOOGLE_CLIENT_ID=your-google-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+ANTHROPIC_API_KEY=your-anthropic-api-key
+FINNHUB_API_KEY=your-finnhub-api-key
+USD_TO_GBP_RATE=0.79
+LOG_LEVEL=info
+```
 
-To confirm it worked:
-`docker images`
-You'll see a list of images that looks unfamiliar — these are Kubernetes' own internal images inside minikube, not your Mac's images. That confirms you're now talking to minikube's Docker.
+For Docker Compose, the `MONGO_URI` should use the container hostname:
+```env
+MONGO_URI=mongodb://admin:secret@mongo:27017/stockanalysis?authSource=admin
+```
 
-To save something in minikube's docker, create a port forwarding connection. Open a dedicated terminal tab and run:
-`kubectl port-forward <pod-name> 27017:27017`
+### Python Pipeline (`Backend/info-processing/.env` and `.env.local`)
 
-Leave this running — don't Ctrl+C it. While it's running, your Python program can connect to MongoDB
+```env
+MONGO_URI=mongodb://admin:secret@localhost:27017/stockanalysis?authSource=admin
+DB_NAME=stocks_data
+ANTHROPIC_API_KEY=your-anthropic-api-key
+```
 
-To see mongo running inside the Kubernetes minikube pod:
-`kubectl exec -it <pod-name> -- mongosh -u admin -p secret --authenticationDatabase admin`
-Get pod name by running
-`kubectl get pods`
+### Frontend (`fundamental-analysis/.env`)
 
+```env
+REACT_APP_API_URL=http://localhost:5001
+```
 
+---
 
-For node deployment and service in minkube, run these first:
-`kubectl apply -f k8s/server-secret.yaml`
-`kubectl apply -f k8s/server-deployment.yaml`
-`kubectl apply -f k8s/server-service.yaml`
+## Running Locally (No Docker)
 
-Create a port connection, run this command and leave the terminal running.
-`kubectl port-forward <pod-name> 5001:5001`
+This mode runs all services natively on your Mac with a local MongoDB instance.
 
+**Step 1 — Start MongoDB**
 
-- Why do we even need port forwarding? 
-When Kubernetes runs your Pods inside minikube, they're on a private internal network that only exists inside the cluster. Think of it like a private office network that has no connection to the outside world.
+```bash
+brew services start mongodb/brew/mongodb-community
+```
 
-Pods inside the cluster can talk to each other freely — that's why your backend can reach MongoDB using just mongo:27017. They're on the same private network.
-But you, sitting on your Mac, have no route into that private network. So you can't just open http://localhost:5001 and expect to hit the server Pod — there's no path there.
+Verify it's running:
+```bash
+brew services list | grep mongodb
+```
 
-kubectl port-forward punches a temporary hole through that boundary — it creates a tunnel from a port on your Mac directly into a specific Pod:
+**Step 2 — Start the Node backend**
 
-It works by:
+```bash
+cd Backend/node-backend
+NODE_ENV=local node server.js
+```
 
-kubectl talks to the Kubernetes API server inside minikube
-The API server opens a connection to the target Pod
-kubectl sits in the middle forwarding traffic between your Mac and the Pod
-That's why the terminal tab has to stay open — kubectl is actively proxying traffic the whole time
+The `NODE_ENV=local` flag tells `dotenv-flow` to load `.env.local` instead of `.env`, which points to `localhost:27017`.
 
-Port-forward is a direct line to a specific Pod — it bypasses all the normal Kubernetes networking. It's really just a debugging and development tool.
-In a real production setup (and eventually in our setup too) you wouldn't use port-forward at all. Instead you'd use an Ingress — a proper gateway that sits at the edge of the cluster and routes external traffic in. 
+**Step 3 — Start the React frontend**
 
+```bash
+cd fundamental-analysis
+npm start
+```
 
+The app opens at [http://localhost:3000](http://localhost:3000).
 
+**Step 4 — Process company data (optional)**
 
-- Apply everything for frontend
-`kubectl apply -f k8s/frontend-secret.yaml`
-`kubectl apply -f k8s/frontend-deployment.yaml`
-`kubectl apply -f k8s/frontend-service.yaml`
+```bash
+cd Backend/info-processing
+ENV=local python company_processing_pipeline.py
+```
 
+The `ENV=local` flag causes `config.py` to load `.env.local`.
 
-Start port forwarding for frontend pod:
-`kubectl port-forward <pod-name> 3000:3000`
-(Also have backend port forwarding running)
-The frontend Pod's only job is to serve the JavaScript files to your browser. Once your browser has those files, it runs them locally on your Mac. All the API calls your React code makes then originate directly from your Mac — which is why they need their own tunnel into the cluster.
+**To stop everything:**
 
+```bash
+brew services stop mongodb/brew/mongodb-community
+# Ctrl+C the Node and React processes
+```
 
+> **Note:** Do not leave MongoDB running when switching to Docker Compose — both will try to bind port 27017 and one will fail.
 
+---
 
-To use the Kubernetes set up:
+## Running with Docker Compose
 
-1. Start minikube
-`minikube start --driver=docker`
+Docker Compose spins up three containers: `frontend`, `server`, and `mongo`. All networking between them is handled automatically by Docker.
 
-Check status
-`minikube status`
-`kubectl get nodes`
+**Step 1 — Ensure local MongoDB is stopped**
 
-Minikube has its own browser-based dashboard you can open any time with:
-`minikube dashboard`
+```bash
+brew services stop mongodb/brew/mongodb-community
+```
 
-2. — Point terminal at minikube's Docker and build images
-`eval $(minikube docker-env)`
-`docker compose build frontend server`
+**Step 2 — Create the backend `.env` file**
 
-3. — Apply all Kubernetes manifests
+The compose file reads `Backend/node-backend/.env`. Make sure it exists with the Docker Compose `MONGO_URI` (uses `mongo` as the hostname, not `localhost`):
 
-# Secrets: loaded from *.local.yaml files which are gitignored and not committed.
-# Copy the relevant *.yaml file, name it *.local.yaml, and fill in your real values.
+```env
+MONGO_URI=mongodb://admin:secret@mongo:27017/stockanalysis?authSource=admin
+DB_NAME=stocks_data
+PORT=5001
+FRONTEND_URL=http://localhost:3000
+JWT_SECRET=your-secret-key-here
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+ANTHROPIC_API_KEY=...
+FINNHUB_API_KEY=...
+```
+
+**Step 3 — Build and start all containers**
+
+```bash
+docker-compose up --build
+```
+
+The `--build` flag rebuilds images from the Dockerfiles. Omit it on subsequent runs if no code has changed.
+
+| Service | Port | URL |
+|---|---|---|
+| React frontend | 3000 | http://localhost:3000 |
+| Node API | 5001 | http://localhost:5001 |
+| MongoDB | 27017 | (internal) |
+
+**Step 4 — Process data with Docker containers running**
+
+With all containers up, the Python pipeline can connect to the containerised MongoDB at `localhost:27017` (the port is forwarded to your Mac):
+
+```bash
+cd Backend/info-processing
+python company_processing_pipeline.py
+```
+
+> This uses `.env` (not `.env.local`), so make sure `.env` points to `mongodb://admin:secret@localhost:27017/...`.
+
+**To rebuild after code changes:**
+
+```bash
+docker-compose down
+docker-compose up --build
+```
+
+**To stop without destroying data:**
+
+```bash
+docker-compose stop
+```
+
+**To stop and remove containers (data volume persists):**
+
+```bash
+docker-compose down
+```
+
+---
+
+## Running on Kubernetes (Minikube)
+
+Minikube simulates a full Kubernetes cluster inside a Docker container on your Mac. All Pods run on a private internal network; `kubectl port-forward` is used to expose them to your Mac for development.
+
+### Secrets Setup
+
+Kubernetes secrets are stored in `*.local.yaml` files which are **gitignored** and never committed. You must create them from the template files before first use.
+
+Copy and fill in the secret files:
+
+```bash
+# MongoDB credentials
+cp k8s/mongo-secret.yaml k8s/mongo-secret.local.yaml
+# Edit mongo-secret.local.yaml and fill in real base64-encoded values
+
+# Node API secrets
+cp k8s/server-secret.yaml k8s/server-secret.local.yaml
+# Edit server-secret.local.yaml and fill in all env var values
+```
+
+To base64-encode a value for a Kubernetes secret:
+```bash
+echo -n "your-value-here" | base64
+```
+
+### Full Kubernetes Setup — Step by Step
+
+**Step 1 — Start Minikube**
+
+```bash
+minikube start --driver=docker
+```
+
+Verify it's running:
+```bash
+minikube status
+kubectl get nodes
+```
+
+Open the dashboard (optional, browser-based UI):
+```bash
+minikube dashboard
+```
+
+**Step 2 — Point your terminal at Minikube's Docker daemon**
+
+```bash
+eval $(minikube docker-env)
+```
+
+This redirects all `docker` commands in this terminal session to Minikube's internal Docker daemon. Any images you build here will be visible to Kubernetes Pods.
+
+Confirm it worked — you'll see Kubernetes' own internal images, not your Mac's:
+```bash
+docker images
+```
+
+> This setting is **terminal-session-only**. Every new terminal tab starts fresh pointing at your Mac's Docker. Run `eval $(minikube docker-env)` again if needed.
+
+**Step 3 — Build the application images inside Minikube**
+
+```bash
+docker compose build frontend server
+```
+
+This builds `stockanalysis-frontend:local` and `stockanalysis-server:local` inside Minikube's Docker, where the Kubernetes Pods can find them. The `imagePullPolicy: Never` in the deployment manifests tells Kubernetes to use the locally built image rather than pulling from a registry.
+
+**Step 4 — Apply Kubernetes manifests**
+
+Apply secrets first (from your `.local.yaml` files), then everything else:
+
+```bash
+# Secrets (gitignored, contain real credentials)
 kubectl apply -f k8s/mongo-secret.local.yaml
 kubectl apply -f k8s/server-secret.local.yaml
 
-# Everything else is safe to commit and apply as-is.
+# MongoDB storage
 kubectl apply -f k8s/mongo-pv.yaml
 kubectl apply -f k8s/mongo-pvc.yaml
+
+# MongoDB
 kubectl apply -f k8s/mongo-deployment.yaml
 kubectl apply -f k8s/mongo-service.yaml
+
+# Node API
 kubectl apply -f k8s/server-deployment.yaml
 kubectl apply -f k8s/server-service.yaml
+
+# React frontend
 kubectl apply -f k8s/frontend-secret.yaml
 kubectl apply -f k8s/frontend-deployment.yaml
 kubectl apply -f k8s/frontend-service.yaml
+
+# Mongo Express (database browser UI, optional)
 kubectl apply -f k8s/mongo-express-deployment.yaml
 kubectl apply -f k8s/mongo-express-service.yaml
+```
 
+**Step 5 — Wait for all Pods to be Ready**
 
-If code changed and you want to restart and create new pods with new code, run this:
-`kubectl rollout restart deployment/frontend deployment/server`
-kubectl apply is only needed when you change the manifest itself
+```bash
+kubectl get pods --watch
+```
 
-To see that the pod is using the latest image, run:
-`kubectl describe pod <pod-name> | grep "Image ID"`
+All Pods should reach `Running` status. Press Ctrl+C when done watching.
 
-And this id should match the id of the image when you run:
-`docker images`
+**Step 6 — Open port-forwards (each in its own terminal tab)**
 
-4. — Wait for all Pods to be running
-`kubectl get pods --watch`
+Port forwarding creates a tunnel from your Mac into a specific Pod. The terminal tab must stay open — closing it closes the tunnel.
 
-5. — Open port-forwards (each in its own terminal tab)
-Frontend
-`kubectl port-forward <pod-name> 3000:3000`
+First, get Pod names:
+```bash
+kubectl get pods
+```
 
-Backend
-`kubectl port-forward <pod-name> 5001:5001`
+Then open a dedicated terminal tab for each:
 
-Leave the Mongo on to run the processing from python
-`kubectl port-forward <pod-name> 27017:27017`
+```bash
+# Frontend (tab 1)
+kubectl port-forward <frontend-pod-name> 3000:3000
 
+# Backend API (tab 2)
+kubectl port-forward <server-pod-name> 5001:5001
 
-Analyzing Mongo
-To analyze what's inside the mogo for Minikube:
-`kubectl exec -it mongo-6db5c45b4b-zzjnd -- mongosh -u admin -p secret --authenticationDatabase admin`
+# MongoDB (tab 3 — needed for the Python pipeline)
+kubectl port-forward <mongo-pod-name> 27017:27017
 
-Open port forwarding for mongo dashboard:
-`kubectl port-forward <pod-name> 8081:8081`
-Then open http://localhost:8081 in your browser. You'll get a UI to browse collections, run queries, and inspect documents.
-This is a dev-only tool — don't deploy it to production without auth enabled.
+# Mongo Express DB browser (tab 4 — optional)
+kubectl port-forward <mongo-express-pod-name> 8081:8081
+```
+
+The app is now accessible at [http://localhost:3000](http://localhost:3000).
+
+The Mongo Express browser is at [http://localhost:8081](http://localhost:8081).
+
+**Step 7 — Process company data against Minikube's MongoDB**
+
+With the MongoDB port-forward running:
+
+```bash
+cd Backend/info-processing
+python company_processing_pipeline.py
+```
+
+Use `.env` (not `.env.local`) pointing at `mongodb://admin:secret@localhost:27017/...`.
+
+### Updating Code in Kubernetes
+
+When you change application code, you need to rebuild the image and restart the Pods — applying the manifest again is not enough (it only re-reads the YAML, not the image).
+
+```bash
+# 1. Make sure terminal points at Minikube's Docker
+eval $(minikube docker-env)
+
+# 2. Rebuild the changed image(s)
+docker compose build frontend server   # or just: docker compose build server
+
+# 3. Restart the deployment(s) to pick up the new image
+kubectl rollout restart deployment/frontend deployment/server
+```
+
+Verify the Pod is using the correct (newest) image:
+```bash
+kubectl describe pod <pod-name> | grep "Image ID"
+docker images   # compare Image IDs
+```
+
+### Inspecting MongoDB Inside Kubernetes
+
+Connect directly to the MongoDB Pod with a shell:
+
+```bash
+kubectl exec -it <mongo-pod-name> -- mongosh -u admin -p secret --authenticationDatabase admin
+```
+
+Replace `<mongo-pod-name>` with the actual name from `kubectl get pods`.
+
+---
+
+## Processing Company Data
+
+The Python pipeline (`company_processing_pipeline.py`) ingests all data for a company into MongoDB. Edit the last line of the file to set the ticker and form types:
+
+```python
+form_types = [FormType.TEN_K]
+process_company('AAPL', form_types, max_summaries=0)
+```
+
+| Parameter | Description |
+|---|---|
+| `ticker` | Stock ticker symbol (e.g., `'AAPL'`, `'MSFT'`) |
+| `form_types` | List of `FormType` values: `TEN_K`, `TEN_Q`, `DEF_14A` |
+| `max_summaries` | Max number of AI summaries to generate. `0` = skip all summarization, `None` = summarize all |
+
+The pipeline runs these 6 steps in order:
+1. Fetch company info from SEC and save to `companies_list`
+2. Fetch XBRL financial metrics and save to `company_financials`
+3. Fetch all filing URLs from SEC EDGAR and save to `reports_list`
+4. Download filing HTMLs, convert to PDFs, store in MongoDB GridFS
+5. Extract text sections from PDFs and (optionally) summarize with Claude
+6. Fetch income, balance sheet, and cash flow statements via yfinance
+
+---
+
+## Useful Commands Reference
+
+### MongoDB
+
+```bash
+# Start/stop local MongoDB
+brew services start mongodb/brew/mongodb-community
+brew services stop mongodb/brew/mongodb-community
+
+# Connect to local MongoDB
+mongosh -u admin -p secret --authenticationDatabase admin
+
+# Connect to MongoDB inside Kubernetes
+kubectl exec -it <mongo-pod-name> -- mongosh -u admin -p secret --authenticationDatabase admin
+```
+
+### Docker
+
+```bash
+# Build a specific image
+docker build -t stock-backend ./Backend/node-backend
+
+# Run a container manually (useful for testing)
+docker run -d -p 5001:5001 --name stock-backend-container --env-file .env stock-backend
+
+# View running containers
+docker ps
+
+# View logs for a container
+docker logs stockanalysis-server
+docker logs -f stockanalysis-server   # follow/live
+
+# Remove all stopped containers
+docker container prune
+```
+
+### Kubernetes / Minikube
+
+```bash
+# Cluster status
+minikube status
+kubectl get nodes
+kubectl get pods
+kubectl get pods --watch        # live updates
+
+# Pod details and logs
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
+kubectl logs -f <pod-name>      # follow/live
+
+# Port forward (keep terminal open)
+kubectl port-forward <pod-name> <local-port>:<container-port>
+
+# Restart deployments (picks up new images)
+kubectl rollout restart deployment/frontend deployment/server
+
+# Apply a single manifest
+kubectl apply -f k8s/server-deployment.yaml
+
+# Delete and re-apply a manifest (force recreation)
+kubectl delete -f k8s/server-deployment.yaml
+kubectl apply -f k8s/server-deployment.yaml
+
+# Stop Minikube (keeps data)
+minikube stop
+
+# Delete Minikube cluster entirely (destroys all data)
+minikube delete
+```
+
+### Node Backend
+
+```bash
+# Local dev
+NODE_ENV=local node server.js
+
+# View logs (rotated daily)
+cat Backend/node-backend/logs/combined-<date>.log
+cat Backend/node-backend/logs/error-<date>.log
+```
+
+### Python Pipeline
+
+```bash
+# Local MongoDB
+ENV=local python company_processing_pipeline.py
+
+# Docker or Kubernetes MongoDB (port-forward must be running)
+python company_processing_pipeline.py
+```
+
+---
+
+For full technical documentation including function-by-function breakdowns, architecture details, and troubleshooting guides, see [DOCUMENTATION.md](DOCUMENTATION.md).
