@@ -273,6 +273,22 @@ def save_report_sections(ticker, form_types, max_summaries=None):
         print(f"Saving summaries - {summarized_report_content['file_name']}")
         write_summary_to_mongo(mongo_uri, db_name, "report_summaries", summarized_report_content)
 
+def _compute_common_sized(df, denom_series):
+    """Returns dict: label -> {date_str: float | None} expressing each value as % of denom_series."""
+    result = {}
+    for label, values in df.iterrows():
+        pct = {}
+        for col, v in values.items():
+            date_str = col.strftime('%Y-%m-%d')
+            d = denom_series.get(col) if hasattr(denom_series, 'get') else None
+            if pd.isna(v) or d is None or pd.isna(d) or d == 0:
+                pct[date_str] = None
+            else:
+                pct[date_str] = round(float(v) / float(d) * 100, 4)
+        result[label] = pct
+    return result
+
+
 def save_financial_statements(ticker):
     import yfinance as yf
     from datetime import datetime
@@ -280,32 +296,52 @@ def save_financial_statements(ticker):
     db = get_database()
     yf_ticker = yf.Ticker(ticker)
 
+    income_annual_df    = yf_ticker.income_stmt
+    income_quarterly_df = yf_ticker.quarterly_income_stmt
+
+    # (collection, period_type, df, denom_source)
+    # denom_source is either a label string (looked up within df) or a DataFrame
+    # whose 'Total Revenue' row is used as the denominator (for cash flow statements).
     statements = [
-        ('income_statements',    'annual',    lambda: yf_ticker.income_stmt),
-        ('income_statements',    'quarterly', lambda: yf_ticker.quarterly_income_stmt),
-        ('balance_sheets',       'annual',    lambda: yf_ticker.balance_sheet),
-        ('balance_sheets',       'quarterly', lambda: yf_ticker.quarterly_balance_sheet),
-        ('cash_flow_statements', 'annual',    lambda: yf_ticker.cashflow),
-        ('cash_flow_statements', 'quarterly', lambda: yf_ticker.quarterly_cashflow),
+        ('income_statements',    'annual',    income_annual_df,                    'Total Revenue'),
+        ('income_statements',    'quarterly', income_quarterly_df,                 'Total Revenue'),
+        ('balance_sheets',       'annual',    yf_ticker.balance_sheet,             'Total Assets'),
+        ('balance_sheets',       'quarterly', yf_ticker.quarterly_balance_sheet,   'Total Assets'),
+        ('cash_flow_statements', 'annual',    yf_ticker.cashflow,                  income_annual_df),
+        ('cash_flow_statements', 'quarterly', yf_ticker.quarterly_cashflow,        income_quarterly_df),
     ]
 
-    for collection_name, period_type, fetch_fn in statements:
+    for collection_name, period_type, df, denom_source in statements:
         try:
-            df = fetch_fn()
             if df is None or df.empty:
                 print(f"No data for {ticker} {collection_name} {period_type}, skipping.")
                 continue
 
+            # Resolve denominator series
+            if isinstance(denom_source, str):
+                denom_series = df.loc[denom_source] if denom_source in df.index else None
+            else:
+                # denom_source is an income statement DataFrame; use its Total Revenue row
+                if denom_source is not None and not denom_source.empty and 'Total Revenue' in denom_source.index:
+                    denom_series = denom_source.loc['Total Revenue']
+                else:
+                    denom_series = None
+
+            cs_map = _compute_common_sized(df, denom_series) if denom_series is not None else {}
+
             periods = [col.strftime('%Y-%m-%d') for col in df.columns]
             rows = []
             for label, values in df.iterrows():
-                rows.append({
+                row = {
                     'label': label,
                     'values': {
                         col.strftime('%Y-%m-%d'): (None if pd.isna(v) else int(v))
                         for col, v in values.items()
-                    }
-                })
+                    },
+                }
+                if label in cs_map:
+                    row['common_sized_values'] = cs_map[label]
+                rows.append(row)
 
             doc = {
                 'ticker':      ticker.upper(),
