@@ -2,7 +2,6 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Card, Table, Button, Spinner, Alert, ButtonGroup } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 
-// Labels that are per-share, ratios, or share counts — not dollar amounts
 const NON_DOLLAR_LABELS = new Set([
   'Tax Rate For Calcs',
   'Tax Effect Of Unusual Items',
@@ -15,11 +14,15 @@ const NON_DOLLAR_LABELS = new Set([
   'Treasury Shares Number',
 ]);
 
+const DENOM_INFO = {
+  income:   { rowLabel: 'Total Revenue', displayName: 'Revenue' },
+  balance:  { rowLabel: 'Total Assets',  displayName: 'Total Assets' },
+  cashflow: { rowLabel: 'Total Revenue', displayName: 'Revenue' },
+};
+
 function formatPeriodHeader(dateStr, periodType) {
   const d = new Date(dateStr + 'T00:00:00');
-  if (periodType === 'annual') {
-    return `FY ${d.getFullYear()}`;
-  }
+  if (periodType === 'annual') return `FY ${d.getFullYear()}`;
   const month = d.toLocaleString('en-US', { month: 'short' });
   return `${month} '${String(d.getFullYear()).slice(2)}`;
 }
@@ -31,19 +34,42 @@ function formatValue(val) {
   return millions.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
+function formatPct(val, prevVal) {
+  if (val === null || val === undefined) return '—';
+  const sign = val < 0 ? '-' : '';
+  const text = `${sign}${Math.abs(val).toFixed(1)}%`;
+  if (prevVal === null || prevVal === undefined) return <span>{text}</span>;
+  const dir = val > prevVal ? 'up' : val < prevVal ? 'down' : null;
+  return (
+    <span>
+      {text}
+      {dir === 'up'   && <span style={{ color: '#16a34a', marginLeft: 2, fontSize: '0.75rem' }}>↑</span>}
+      {dir === 'down' && <span style={{ color: '#dc2626', marginLeft: 2, fontSize: '0.75rem' }}>↓</span>}
+    </span>
+  );
+}
+
+function formatBillions(val) {
+  if (val === null || val === undefined) return null;
+  const b = Math.abs(val) / 1e9;
+  return `$${b.toFixed(0)}B`;
+}
+
 const STATEMENT_OPTIONS = [
   { key: 'income',   label: 'Income Statement' },
   { key: 'balance',  label: 'Balance Sheet' },
   { key: 'cashflow', label: 'Cash Flow' },
 ];
 
+
 const FinancialsTab = ({ company }) => {
   const navigate = useNavigate();
   const [activeStatement, setActiveStatement] = useState('income');
-  const [activePeriod, setActivePeriod] = useState('annual');
-  const [data, setData] = useState(null);
+  const [activePeriod, setActivePeriod]       = useState('annual');
+  const [activeView, setActiveView]           = useState('$');
+  const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError]   = useState(null);
 
   const fetchStatement = useCallback(async () => {
     setLoading(true);
@@ -53,7 +79,7 @@ const FinancialsTab = ({ company }) => {
       const url = `${process.env.REACT_APP_API_URL}/api/financials/${company.ticker}/statements?statement=${activeStatement}&period=${activePeriod}`;
       const res = await fetch(url);
       if (res.status === 404) {
-        setError('No financial data found. Run the pipeline to fetch this company\'s statements.');
+        setError("No financial data found. Run the pipeline to fetch this company's statements.");
         return;
       }
       if (!res.ok) throw new Error('Failed to load data');
@@ -69,14 +95,25 @@ const FinancialsTab = ({ company }) => {
 
   const visibleRows = data?.rows?.filter(row => {
     if (NON_DOLLAR_LABELS.has(row.label)) return false;
-    // drop rows where every value is null or 0
+    if (activeView === '%') {
+      return row.common_sized_values &&
+        Object.values(row.common_sized_values).some(v => v !== null);
+    }
     return Object.values(row.values).some(v => v !== null && v !== 0);
   }) ?? [];
 
+  const denomInfo        = DENOM_INFO[activeStatement];
+  const denomRow         = data?.rows?.find(r => r.label === denomInfo.rowLabel);
+  const mostRecentPeriod = data?.periods?.[0];
+  const denomBillions    = formatBillions(denomRow?.values?.[mostRecentPeriod]);
+  const mostRecentHeader = mostRecentPeriod
+    ? formatPeriodHeader(mostRecentPeriod, activePeriod)
+    : '';
+
   return (
     <div>
-      {/* Statement type selector */}
-      <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      {/* All controls in one row */}
+      <div className="d-flex align-items-center gap-2 mb-3 flex-wrap">
         <ButtonGroup size="sm">
           {STATEMENT_OPTIONS.map(({ key, label }) => (
             <Button
@@ -89,19 +126,31 @@ const FinancialsTab = ({ company }) => {
           ))}
         </ButtonGroup>
 
-        {/* Annual / Quarterly toggle */}
+        <div className="d-flex align-items-center gap-2 ms-auto">
+        <ButtonGroup size="sm">
+          {['$', '%'].map(v => (
+            <Button
+              key={v}
+              variant={activeView === v ? 'dark' : 'outline-secondary'}
+              onClick={() => setActiveView(v)}
+            >
+              {v}
+            </Button>
+          ))}
+        </ButtonGroup>
+
         <ButtonGroup size="sm">
           {['annual', 'quarterly'].map(p => (
             <Button
               key={p}
               variant={activePeriod === p ? 'dark' : 'outline-secondary'}
               onClick={() => setActivePeriod(p)}
-              style={{ textTransform: 'capitalize' }}
             >
               {p === 'annual' ? 'Annual' : 'Quarterly'}
             </Button>
           ))}
         </ButtonGroup>
+        </div>
       </div>
 
       <Card className="shadow-sm">
@@ -119,9 +168,20 @@ const FinancialsTab = ({ company }) => {
 
           {data && !loading && (
             <>
-              <div className="text-muted small px-3 pt-3 pb-2">
-                {activePeriod === 'annual' ? 'Annual' : 'Quarterly'} · USD (millions)
+              <div className="d-flex justify-content-between align-items-center px-3 pt-3 pb-2">
+                <span className="text-muted small">
+                  {activePeriod === 'annual' ? 'Annual' : 'Quarterly'}
+                  {activeView === '$'
+                    ? ' · USD (millions)'
+                    : ` · % of ${denomInfo.displayName}`}
+                </span>
+                {activeView === '%' && denomBillions && (
+                  <span className="text-muted small">
+                    {`Each value as a % of ${denomInfo.displayName} (${denomBillions} ${mostRecentHeader} est.)`}
+                  </span>
+                )}
               </div>
+
               <div style={{ overflowX: 'auto' }}>
                 <Table hover size="sm" className="mb-0" style={{ minWidth: 500 }}>
                   <thead>
@@ -138,9 +198,14 @@ const FinancialsTab = ({ company }) => {
                     {visibleRows.map(row => (
                       <tr key={row.label}>
                         <td style={{ paddingLeft: '1rem', color: '#333' }}>{row.label}</td>
-                        {data.periods.map(p => (
+                        {data.periods.map((p, i) => (
                           <td key={p} className="text-end" style={{ paddingRight: '1rem', color: '#444' }}>
-                            {formatValue(row.values[p])}
+                            {activeView === '$'
+                              ? formatValue(row.values[p])
+                              : formatPct(
+                                  row.common_sized_values?.[p],
+                                  row.common_sized_values?.[data.periods[i + 1]]
+                                )}
                           </td>
                         ))}
                       </tr>
