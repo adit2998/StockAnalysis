@@ -212,7 +212,7 @@ One document per registered user.
 ```
 
 ### `income_statements`, `balance_sheets`, `cash_flow_statements`
-One document per ticker per period type (annual or quarterly). Populated by yfinance via the Python pipeline.
+One document per ticker per period type (annual or quarterly). Populated by yfinance via the Python pipeline. Each row carries both the raw dollar values and pre-computed common-sized percentages.
 ```json
 {
   "_id": ObjectId,
@@ -226,11 +226,35 @@ One document per ticker per period type (annual or quarterly). Populated by yfin
       "values": {
         "2023-09-30": 383285000000,
         "2022-09-24": 394328000000
+      },
+      "common_sized_values": {
+        "2023-09-30": 100.0,
+        "2022-09-24": 100.0
+      }
+    },
+    {
+      "label": "Net Income",
+      "values": {
+        "2023-09-30": 96995000000,
+        "2022-09-24": 99803000000
+      },
+      "common_sized_values": {
+        "2023-09-30": 25.3,
+        "2022-09-24": 25.3
       }
     }
   ]
 }
 ```
+
+**Common-sizing denominators by collection:**
+| Collection | Denominator row | Display label |
+|---|---|---|
+| `income_statements` | `Total Revenue` (within same df) | Revenue |
+| `balance_sheets` | `Total Assets` (within same df) | Total Assets |
+| `cash_flow_statements` | `Total Revenue` (from income statement df) | Revenue |
+
+`common_sized_values` is `null` for a period if the denominator is zero, missing, or NaN for that period. Rows with no non-null common-sized values are omitted from the `%` view in the UI.
 
 ### `stock_quotes`
 Daily-cached stock quote. One document per ticker.
@@ -992,11 +1016,19 @@ Extracts sections from each filing PDF and optionally summarizes them.
 - Writes a local JSON file (`test_summary_{filename}.json`) as a diagnostic artifact after each summarization.
 - `max_summaries=0` skips all summarization. `max_summaries=None` summarizes everything.
 
+**`_compute_common_sized(df, denom_series)`**
+Pure helper that takes a DataFrame and a denominator `pd.Series` (indexed by the same period columns) and returns a dict of `label → { date_str: float | None }` where each value is expressed as a percentage of the denominator. Returns `None` for any cell where the value or denominator is NaN/zero, or where the date is absent from the denominator series (handles misaligned dates between cash flow and income statement).
+
 **`save_financial_statements(ticker)`**
-Fetches income statement, balance sheet, and cash flow statement (both annual and quarterly) via yfinance and upserts to the respective MongoDB collections.
-- Uses `yf.Ticker(ticker)` and accesses `.income_stmt`, `.quarterly_income_stmt`, etc.
+Fetches income statement, balance sheet, and cash flow statement (both annual and quarterly) via yfinance, computes common-sized values, and upserts everything to the respective MongoDB collections.
+- Pre-fetches the annual and quarterly income statement DataFrames once so their `Total Revenue` row can be reused as the cash flow denominator.
+- Resolves the denominator series per statement type:
+  - Income statement → `Total Revenue` row within the same DataFrame.
+  - Balance sheet → `Total Assets` row within the same DataFrame.
+  - Cash flow → `Total Revenue` row from the income statement DataFrame (different DataFrame).
+- Calls `_compute_common_sized` to produce percentage values for every row.
 - Normalizes: converts column dates to `YYYY-MM-DD` strings, converts NaN values to `None`, converts floats to integers.
-- Stores the data in `{ ticker, period_type, fetched_at, periods, rows }` format.
+- Stores data as `{ ticker, period_type, fetched_at, periods, rows }` where each row has both `values` (raw integers) and `common_sized_values` (rounded floats, omitted if no denominator was found).
 
 **`process_company(ticker, form_types, max_summaries)`**
 Top-level function that runs all 6 steps in sequence for a given ticker:
@@ -1138,6 +1170,27 @@ Detailed view of a single metric over time. Shows a full line chart with all his
 
 **`FinancialsTab.js`**
 Renders the full financial statements within the company page context. Uses the same data as `CompanyFinancials.js` but embedded in the tab layout.
+
+Controls are laid out in a single row:
+- **Statement selector** (`Income Statement | Balance Sheet | Cash Flow`) — left-aligned.
+- **View toggle** (`$ | %`) and **period toggle** (`Annual | Quarterly`) — right-aligned (`ms-auto`).
+
+**`$` view (default):** Displays raw values in USD millions. Subtitle reads "Annual · USD (millions)".
+
+**`%` view (common-sized):** Reads `common_sized_values` from each row instead of `values`. Values are formatted to 1 decimal place with a `%` suffix. Each period cell also shows a YoY change arrow:
+- Green ↑ if the current period's % is higher than the prior year (next column, since periods are newest-first).
+- Red ↓ if lower. No arrow on the oldest period (no prior year to compare).
+
+Subtitle in `%` mode has two parts:
+- Left: "Annual · % of Revenue" (or "% of Total Assets" for balance sheet).
+- Right: "Each value as a % of Revenue ($408B FY2025 est.)" — the denominator row's most-recent raw value formatted in billions, shown only when the denominator row exists in the current data.
+
+`DENOM_INFO` maps each statement key to `{ rowLabel, displayName }`:
+- `income` → `Total Revenue` / "Revenue"
+- `balance` → `Total Assets` / "Total Assets"
+- `cashflow` → `Total Revenue` / "Revenue"
+
+Row filtering: in `%` mode, rows are hidden if `common_sized_values` is absent or all-null. `NON_DOLLAR_LABELS` rows (EPS, share counts, tax rates) are hidden in both modes.
 
 **`FilingsTab.js`**
 Lists all filings (10-K, 10-Q, DEF 14A) with filing dates and links to the Report Details page.
