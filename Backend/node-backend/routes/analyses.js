@@ -85,6 +85,8 @@ module.exports = (db) => {
       const {
         ticker, companyName, tierLevel, tierName,
         questions, basePrompt, sources,
+        reportOptions = {},
+        questionEmbeddedData = [],
       } = req.body;
 
       if (!ticker)           return res.status(400).json({ error: 'ticker is required' });
@@ -115,22 +117,24 @@ module.exports = (db) => {
 
       // Create DB record
       const doc = {
-        userId:           new ObjectId(req.user.userId),
-        ticker:           ticker.toUpperCase(),
-        companyName:      companyName || ticker.toUpperCase(),
-        tierLevel:        tierLevel ?? 'custom',
-        tierName:         tierName   || 'Custom',
+        userId:               new ObjectId(req.user.userId),
+        ticker:               ticker.toUpperCase(),
+        companyName:          companyName || ticker.toUpperCase(),
+        tierLevel:            tierLevel ?? 'custom',
+        tierName:             tierName   || 'Custom',
         questions,
-        basePrompt:       basePrompt || '',
+        basePrompt:           basePrompt || '',
         sources,
-        status:           'pending',
-        report:           null,
-        estimatedCostGBP: estimate.estimatedCostGBP,
-        actualCostGBP:    null,
-        tokenUsage:       null,
-        error:            null,
-        createdAt:        new Date(),
-        completedAt:      null,
+        reportOptions,
+        questionEmbeddedData,
+        status:               'pending',
+        report:               null,
+        estimatedCostGBP:     estimate.estimatedCostGBP,
+        actualCostGBP:        null,
+        tokenUsage:           null,
+        error:                null,
+        createdAt:            new Date(),
+        completedAt:          null,
       };
 
       const result     = await db.collection('generated_reports').insertOne(doc);
@@ -160,7 +164,8 @@ module.exports = (db) => {
           tierName    || 'Custom',
           questions,
           basePrompt  || '',
-          sources
+          sources,
+          reportOptions
         );
       });
 

@@ -35,7 +35,7 @@ This document provides exhaustive documentation of every component in the DeepVa
 5. [Frontend — React Application](#5-frontend--react-application)
    - [Application Entry and Routing](#51-application-entry-and-routing)
    - [AuthContext](#52-authcontext)
-   - [Page Components](#53-page-components)
+   - [Page Components (including AnalysisText.js)](#53-page-components)
    - [Company Page Tabs](#54-company-page-tabs)
 6. [Docker Configuration](#6-docker-configuration)
    - [Node Backend Dockerfile](#61-node-backend-dockerfile)
@@ -181,9 +181,23 @@ One document per AI analysis run. Status progresses: `pending` → `running` →
     "filings": [{ "fileName": "AAPL_10-K_report_2023-11-03.pdf", "sections": null }],
     "reportPeriods": ["income_annual"]
   },
+  "reportOptions": {
+    "autoSuggestData": true,
+    "showKeyFindings": true,
+    "includeSourceCitations": true
+  },
+  "questionEmbeddedData": [
+    [{ "id": "revenue_trend", "label": "Revenue trend", "icon": "trend" }],
+    [{ "id": "gross_margin",  "label": "Gross margin trend", "icon": "trend" }]
+  ],
   "status": "completed",
   "report": [
-    { "q": "What is the revenue trend?", "a": "Revenue grew from..." }
+    {
+      "q": "What is the revenue trend?",
+      "key_findings": ["Revenue re-accelerated +6.4% in FY2025", "Growth is organic, not acquisition-driven"],
+      "analysis": "## Revenue Trajectory\n\nTotal revenue...",
+      "sources": ["Income Statement (Annual)", "MD&A section"]
+    }
   ],
   "estimatedCostGBP": 0.0023,
   "actualCostGBP": 0.0019,
@@ -193,6 +207,26 @@ One document per AI analysis run. Status progresses: `pending` → `running` →
   "completedAt": "2026-06-01T10:00:45Z"
 }
 ```
+
+**`report` array shape — two formats:**
+| Field | Present when | Description |
+|---|---|---|
+| `q` | always | The original question text |
+| `key_findings` | `showKeyFindings: true` | 2–4 bullet-point highlights extracted by the model via tool use |
+| `analysis` | `showKeyFindings: true` | Full markdown analysis text |
+| `sources` | `showKeyFindings: true` | Filing sections / statements cited by the model |
+| `a` | `showKeyFindings: false` | Legacy plain-text answer (no structure) |
+
+`AnalysisReportPage` detects the format by checking for `item.key_findings` and renders accordingly. Both formats are supported simultaneously (old reports remain readable).
+
+**`reportOptions` fields:**
+| Field | Default | Effect |
+|---|---|---|
+| `autoSuggestData` | `true` | Frontend keyword-matches question text to chart chips |
+| `showKeyFindings` | `true` | Backend uses Anthropic tool use; report has structured `key_findings`/`analysis`/`sources` |
+| `includeSourceCitations` | `true` | Model is prompted to populate the `sources` array |
+
+**`questionEmbeddedData`** is a parallel array to `questions` — each entry is a list of chart chip objects `{ id, label, icon }` that were attached to that question on the creation page. Stored so the report page can display them as read-only data tags next to each answer.
 
 ### `users`
 One document per registered user.
@@ -575,12 +609,27 @@ Returns a single analysis including the full `report` (Q&A array).
 
 **`POST /api/analyses`**
 Creates a new analysis and kicks off async processing.
+
+**Request body fields:**
+| Field | Required | Description |
+|---|---|---|
+| `ticker` | Yes | Stock ticker symbol |
+| `questions` | Yes | Array of question strings |
+| `sources` | Yes | `{ filings, reportPeriods }` object |
+| `companyName` | No | Display name (falls back to ticker) |
+| `tierLevel` | No | Tier number or `'custom'` |
+| `tierName` | No | Display name for the tier |
+| `basePrompt` | No | Tier's system prompt prefix |
+| `reportOptions` | No | `{ autoSuggestData, showKeyFindings, includeSourceCitations }` (defaults to `{}`) |
+| `questionEmbeddedData` | No | Parallel array of chip arrays per question (defaults to `[]`) |
+
+**Processing steps:**
 1. Validates required fields (`ticker`, `questions`, `sources`).
 2. Validates `countSelections` ≤ `MAX_SELECTIONS`.
 3. Calls `estimateCost()` and rejects if estimated cost exceeds `MAX_COST_GBP`.
-4. Inserts a new document into `generated_reports` with `status: 'pending'`.
+4. Inserts a new document into `generated_reports` with `status: 'pending'`, storing `reportOptions` and `questionEmbeddedData` alongside the other fields.
 5. Links the analysis ID to the user's `generated_reports` array (`$addToSet`).
-6. Uses `setImmediate()` to fire off `runAnalysis()` in the background **after** the HTTP response is sent.
+6. Uses `setImmediate()` to fire off `runAnalysis()` in the background **after** the HTTP response is sent. Passes `reportOptions` as the final argument.
 7. Responds immediately with `{ analysisId, status: 'pending', estimatedCostGBP }`.
 
 The `setImmediate` pattern means the response goes back to the client in milliseconds, regardless of how long the analysis takes (typically 30-60 seconds). The frontend then polls `GET /api/analyses/:id` for status changes.
@@ -596,6 +645,14 @@ The core AI analysis orchestration layer. Contains the business logic for cost e
 - `OUTPUT_COST_PER_M_USD = 15.00` — output token price per million tokens.
 - `USD_TO_GBP` — conversion rate, read from `USD_TO_GBP_RATE` env var (default 0.79).
 - `STATEMENT_MAP` — maps short keys (`income`, `balance`, `cashflow`) to their MongoDB collection names and display labels.
+
+**`ANSWER_ALL_QUESTIONS_TOOL`**
+An Anthropic tool definition used in the structured ("tool use") mode. The tool is named `answer_all_questions` and has a single `answers` array property. Each element of the array must have:
+- `key_findings` — array of 2–4 concise bullet strings
+- `analysis` — full markdown analysis text (uses `**bold**`, `## headings`, `| table |` syntax)
+- `sources` — array of filing section / statement names
+
+The model is instructed to call this tool **exactly once** with all N answers in order. This avoids the bug where `tool_choice: 'any'` only guarantees at least one call — with a single tool that takes an array, the model fills all answers in one call.
 
 **`charsToTokens(charCount)`**
 Converts a character count to an approximate token count using the standard ratio of 1 token ≈ 4 characters.
@@ -631,24 +688,33 @@ Calculates an estimated cost before committing to running an analysis.
 - Estimates output tokens as `questions.length * 500` (500 tokens per answer).
 - Returns `{ estimatedCostGBP, inputTokensEstimate, outputTokensEstimate, sourceChars }`.
 
-**`runAnalysis(db, analysisId, userId, ticker, companyName, tierName, questions, basePrompt, sources)`**
-The main async analysis runner. Called fire-and-forget from the API route.
+**`runAnalysis(db, analysisId, userId, ticker, companyName, tierName, questions, basePrompt, sources, reportOptions)`**
+The main async analysis runner. Called fire-and-forget from the API route. Extracts `showKeyFindings` from `reportOptions` (defaults `false`) and branches into two modes.
 
-Steps:
-1. Updates the analysis status to `running` in MongoDB.
-2. Calls `fetchSourceContent` to load all source material.
-3. Throws if no source content was found.
-4. Builds the **system prompt**: the tier's `basePrompt` plus strict JSON output instructions.
-5. Builds the **user message**: company identifier, source data block, numbered questions, output format reminder.
-6. Instantiates the Anthropic client with the API key.
-7. Calls `anthropic.messages.create()` with `claude-sonnet-4-6`, `max_tokens: 8192`.
-8. Strips any markdown code fences from the response (Claude sometimes wraps JSON in `` ```json `` despite instructions).
-9. Parses the cleaned text as JSON and validates it's an array.
-10. Calculates the actual cost from the usage counters returned by the API.
-11. Updates the `generated_reports` document with `status: completed`, the report Q&A array, actual cost, token usage, and completion timestamp.
-12. Increments `total_spend_gbp` on the user document.
-13. Updates or inserts the current month's entry in `monthly_spend` (checks if an entry for this year+month already exists, then either increments it or pushes a new entry).
-14. On any error: updates the analysis status to `failed` and stores the error message.
+**Tool use mode (`showKeyFindings: true`):**
+1. Updates status to `running`.
+2. Fetches source content via `fetchSourceContent`.
+3. Builds a system prompt from `basePrompt` plus injected instructions: "call `answer_all_questions` exactly once with all N answers in the answers array".
+4. Builds the user message: company identifier, source data block, numbered questions.
+5. Calls `anthropic.messages.create()` with `tools: [ANSWER_ALL_QUESTIONS_TOOL]` and `tool_choice: { type: 'any' }`.
+6. Finds the `tool_use` block named `answer_all_questions` in the response content.
+7. Throws if the block is missing (model failed to call the tool).
+8. Maps `toolBlock.input.answers` back to questions — each report item is `{ q, key_findings, analysis, sources }`.
+9. Saves the structured report to MongoDB.
+
+**Legacy mode (`showKeyFindings: false`):**
+1. Same steps 1–4, but the system prompt instructs the model to return a plain JSON array.
+2. Calls `anthropic.messages.create()` without tools.
+3. Strips any markdown code fences from the response text.
+4. Parses the cleaned text as a JSON array; each item is `{ q, a }`.
+5. Saves the legacy report to MongoDB.
+
+**Shared post-call steps (both modes):**
+- Calculates `actualCostGBP` from `response.usage`.
+- Updates `generated_reports` with `status: 'completed'`, the `report` array, actual cost, token usage, and `completedAt`.
+- Increments `total_spend_gbp` on the user document.
+- Updates or inserts the current month's entry in `monthly_spend` (checks year+month, either increments existing or pushes a new entry).
+- On any error: sets `status: 'failed'` and stores `error` message in the document.
 
 ---
 
@@ -1167,19 +1233,74 @@ Shows section-by-section content for a specific filing. Fetches from `GET /api/r
 Full financial statements page. Displays income statement, balance sheet, and cash flow statement in tabular format. Allows toggling between annual and quarterly. Data comes from `GET /api/financials/:ticker/statements`.
 
 **`NewAnalysisPage.js`**
-AI analysis creation form.
-- Loads available filings and financial statements for the company.
-- Loads tier templates from `GET /api/tier-templates`.
-- User selects a tier (or custom), picks source filings/sections/statements.
-- Shows live cost estimate (calls `POST /api/analyses/estimate` on selection changes).
-- Enforces `MAX_SELECTIONS = 5` and `MAX_COST_GBP = 0.50` with UI feedback.
-- On submit: calls `POST /api/analyses`, then navigates to the analysis result page.
+AI analysis creation form. Handles tier selection, source picking, per-question embedded data chips, report options, and cost estimation.
+
+**State:**
+- `selectedTier` — selected tier template object (or `null` for custom).
+- `questions` — array of question strings.
+- `questionEmbeddedData` — parallel array; each entry is an array of chip objects `{ id, label, icon }` attached to that question.
+- `reportOptions` — object `{ autoSuggestData: bool, showKeyFindings: bool, includeSourceCitations: bool }`.
+- `attachMenuOpenIdx` — index of the question whose "Attach data" dropdown is open, or `null`.
+- Various source selection state: `selectedFilings`, `selectedSections`, `selectedPeriods`, etc.
+
+**Ref:**
+- `userRemovedChartsRef` — `useRef({})`. Tracks chart IDs the user has explicitly removed per question index (keyed as `"qIdx:chartId"`). Prevents auto-suggest from re-adding a chip the user dismissed. Stored in a ref (not state) so reads/writes don't cause re-renders.
+
+**`CHART_SUGGESTIONS`**
+Array of 8 chart chip definitions. Each entry has `{ id, label, icon, keywords[] }`. The `keywords` array contains lowercase phrases matched against the question text. Chart types include: revenue trend, segment breakdown, gross margin trend, operating leverage, cash flow vs. capex, balance sheet leverage, EPS/earnings trend, and free cash flow yield.
+
+**`getAutoSuggestions(questionText)`**
+Scans a question string for keyword matches across `CHART_SUGGESTIONS` and returns matching chip objects (deduped). Returns an empty array if no keywords match.
+
+**Auto-suggest effect**
+Runs when `[questions, reportOptions.autoSuggestData, selectedTier]` change. Only active when `autoSuggestData` is `true` and the selected tier is not custom (custom templates have no standard question set, so auto-suggest would be irrelevant). For each question, computes suggestions, filters out chips the user already has or explicitly removed (`userRemovedChartsRef.current`), and **adds** any new suggestions. Never removes existing chips.
+
+**Click-outside effect**
+On mount, attaches a `mousedown` listener to `document`. Closes the attach dropdown (`setAttachMenuOpenIdx(null)`) when the user clicks outside the menu. Cleans up on unmount.
+
+**Per-question UI**
+Each question is rendered as a card with:
+- An `<input>` for the question text (editable for custom tiers).
+- A row below showing the current embedded data chips with a remove `×` button each.
+- An "Attach data +" button that opens a dropdown listing all `CHART_SUGGESTIONS` not yet attached; clicking one adds it.
+- An `attachMenuRef` div used by the click-outside effect to identify the menu boundary.
+
+**Report Options section**
+Three toggle switches rendered via a custom `Toggle` component:
+- **Auto-suggest data** — whether to keyword-match chips to questions.
+- **Show key findings** — whether to use Anthropic tool use mode and show the `KEY FINDINGS` callout in the report.
+- **Include source citations** — whether the model populates the `sources` array.
+
+**`handleRunAnalysis()`**
+On submit:
+1. Validates at least one source is selected.
+2. POSTs to `POST /api/analyses` with all fields including `reportOptions` and `questionEmbeddedData`.
+3. On success: navigates to `/companies/:ticker/analyses/:analysisId`.
 
 **`AnalysisReportPage.js`**
 Displays a completed analysis or polls for completion.
-- Fetches from `GET /api/analyses/:id`.
-- If status is `pending` or `running`: polls every few seconds until `completed` or `failed`.
-- Shows Q&A pairs, metadata (tier, cost, token usage, sources), and timestamps.
+
+**Polling:**
+- Fetches `GET /api/analyses/:id` immediately on mount.
+- Stores the interval ID in `pollRef` (a `useRef`) so the interval can be cleared when the analysis reaches a terminal state.
+- Polls every `STATUS_POLL_INTERVAL_MS` (3 seconds) until `status === 'completed'` or `status === 'failed'`.
+
+**Header card:** Shows tier badge (color-coded by `TIER_COLORS[tierLevel]`), company + tier name, `StatusBadge`, creation/completion timestamps, and three `CostPill` components (estimated cost, actual cost, token count).
+
+**`StatusBadge`** — inline component rendering a colored pill for `pending`, `running`, `completed`, or `failed` states.
+
+**`CostPill`** — inline component rendering a labeled value pill. The `highlight` variant uses blue background/text (used for the actual cost pill).
+
+**`EmbeddedDataChip`** — renders a small blue chip for each chart attached to a question, showing a `TrendingUp` or `BarChart2` icon (from lucide-react) and the chart label.
+
+**`KeyFindingsCallout`** — renders the `KEY FINDINGS` callout box with a blue left border. Maps each finding through a warning-keyword regex (`/risk|concern|caution|pressure|decline|weak|headwind|but|however|note|caveat/i`). Warnings get an amber `⚠` prefix; positive findings get a green `✓`.
+
+**Collapsible question sections:**
+- `collapsedQuestions` state is a `Set` of question indices.
+- Each question card has a header button with a `Q#` badge, question text, a `ChevronDown`/`ChevronRight` icon, and a "Click to expand" sub-label when collapsed.
+- The body renders: `KeyFindingsCallout`, embedded data chips row (if any), `<AnalysisText>` for the markdown body, and a sources tag row.
+
+**Backward compatibility:** Reads `const bodyText = item.analysis ?? item.a ?? ''` to support both the new structured format (`analysis` field) and legacy format (`a` field). Key findings and sources default to empty arrays if absent, so old reports render without errors.
 
 **`ProfilePage.js`**
 User profile dashboard.
@@ -1187,6 +1308,51 @@ User profile dashboard.
 - Displays a bar chart of monthly spending over the last 6 months.
 - Lists all past analyses with their status and cost.
 - Data from `GET /api/users/me` and `GET /api/users/stats`.
+
+**`AnalysisText.js`**
+Markdown-aware renderer for analysis body text. Receives a raw markdown string and produces structured React elements including interactive charts, styled tables, headings, and inline formatting.
+
+**`parseCell(raw)`**
+Parses a single table cell string into a numeric value. Handles:
+- Dollar signs and commas.
+- Parenthetical negatives: `(1,234)` → `-1234`.
+- Suffix multipliers: `B` (billions), `M` (millions), `K` (thousands), `T` (trillions). Values are normalized to billions for the chart axes.
+- Percent suffix: returns `{ isPercent: true }`.
+- Returns `null` for non-numeric cells.
+
+**`buildChartData(table)`**
+Converts a parsed markdown table into Recharts-compatible data. Identifies numeric columns (skipping the first column which is the X label), splits them into `absCols` (absolute dollar values) and `pctCols` (percentage values), and returns `{ chartData, absCols, pctCols, numericCols }`. Returns `null` if no numeric columns are found.
+
+**`isTimeSeries(headers)`**
+Returns `true` if the first column header matches a time/period pattern: `period`, `year`, `fy` + digit, `q[1-4]` + digit, `quarter`, `date`, `fiscal`. Time-series tables are rendered as line charts; all other tables are rendered as styled HTML tables.
+
+**`DataChart`**
+Renders a Recharts `LineChart` with dual Y-axes for tables identified as time series.
+- Left Y-axis (`yAxisId="abs"`): absolute dollar values, formatted by `fmtAbsAxis` (`$B`/`$M` suffixes).
+- Right Y-axis (`yAxisId="pct"`): percentage values, formatted by `fmtPctAxis` (`%` suffix), lines rendered dashed.
+- Tooltip uses `fmtTooltipValue` which auto-detects whether a series should be shown in `$T`/`$B`/`$M` or `%` format.
+- If there is only one numeric series, the legend is hidden.
+- Title (if present) comes from the markdown heading immediately preceding the table, which is promoted to a chart title and removed from the heading list.
+
+**`StyledTable`**
+Renders any non-time-series markdown table as a styled HTML `<table>`. First column is left-aligned; all other columns are right-aligned with tabular-nums font variant. Header row has a light grey background. Rows have a thin bottom border.
+
+**`InlineText`**
+Parses a single line of text for inline markdown: `**bold**` → `<strong>` and `` `code` `` → `<code>` with monospace styling. Uses a greedy index comparison to handle interleaved bold and code spans correctly.
+
+**`parseBlocks(text)`**
+Splits raw markdown text into typed block objects:
+- `{ type: 'heading', level, text }` — lines starting with `#` to `####`.
+- `{ type: 'table', table: { headers, rows }, title }` — consecutive `|`-delimited lines. A heading immediately before the first table line is captured as `title` and removed from the heading stream.
+- `{ type: 'text', text }` — all other non-empty lines.
+- `{ type: 'break' }` — empty lines (paragraph separators).
+
+**`AnalysisText` (main export)**
+Iterates over blocks from `parseBlocks`:
+- Adjacent `text` blocks are buffered into a `paraBuffer` and flushed as a single `<p>` on `break` or non-text blocks.
+- `heading` blocks produce a `<div>` with bold text, font-size scaled by level.
+- `table` blocks: dispatched to `DataChart` (if `isTimeSeries`) or `StyledTable` (otherwise).
+- Returns a `<div>` wrapping all produced elements.
 
 ---
 
@@ -1478,7 +1644,9 @@ python company_processing_pipeline.py
 User (Browser)         React Frontend          Node API            Background Process
       │                      │                     │                      │
       │ Select tier,          │                     │                      │
-      │ sources, files        │                     │                      │
+      │ sources, questions,   │                     │                      │
+      │ attach data chips,    │                     │                      │
+      │ set report options    │                     │                      │
       │──────────────────────>│                     │                      │
       │                       │ POST /analyses/estimate                    │
       │                       │────────────────────>│                      │
@@ -1489,20 +1657,44 @@ User (Browser)         React Frontend          Node API            Background Pr
       │ Click "Run Analysis"  │                     │                      │
       │──────────────────────>│                     │                      │
       │                       │ POST /analyses      │                      │
+      │                       │ { questions,        │                      │
+      │                       │   reportOptions,    │                      │
+      │                       │   questionEmbeddedData, ... }              │
       │                       │────────────────────>│                      │
       │                       │  Validate inputs    │                      │
       │                       │  Check cost cap     │                      │
-      │                       │  Insert doc (pending)                      │
+      │                       │  Insert doc (pending, stores reportOptions │
+      │                       │    + questionEmbeddedData)                 │
       │                       │  Link to user       │                      │
       │                       │  setImmediate() ──────────────────────────>│
       │                       │<─ { analysisId, status: 'pending' }        │
       │                       │                     │  fetchSourceContent() │
-      │                       │                     │  Build prompt         │
-      │                       │                     │  Claude API call      │
-      │                       │                     │  Parse JSON           │
-      │                       │                     │  Update DB (completed)│
-      │                       │                     │  Update user spend    │
-      │                       │                     │                       │
+      │                       │                     │                      │
+      │                       │                     │  if showKeyFindings: │
+      │                       │                     │    Tool use mode:    │
+      │                       │                     │    system: basePrompt│
+      │                       │                     │      + tool instrs  │
+      │                       │                     │    tools: [answer_all│
+      │                       │                     │      _questions]     │
+      │                       │                     │    Claude API call   │
+      │                       │                     │    Extract tool_use  │
+      │                       │                     │      block answers   │
+      │                       │                     │    report: [{q,      │
+      │                       │                     │      key_findings,   │
+      │                       │                     │      analysis,       │
+      │                       │                     │      sources}]       │
+      │                       │                     │  else:               │
+      │                       │                     │    Legacy mode:      │
+      │                       │                     │    system: basePrompt│
+      │                       │                     │      + JSON instrs   │
+      │                       │                     │    Claude API call   │
+      │                       │                     │    Parse JSON array  │
+      │                       │                     │    report: [{q, a}]  │
+      │                       │                     │                      │
+      │                       │                     │  Update DB (completed│
+      │                       │                     │    + actualCostGBP)  │
+      │                       │                     │  Update user spend   │
+      │                       │                     │                      │
       │                Navigate to AnalysisReportPage                      │
       │──────────────────────>│                     │                      │
       │                       │ GET /analyses/:id   │                      │
@@ -1513,7 +1705,11 @@ User (Browser)         React Frontend          Node API            Background Pr
       │                       │ GET /analyses/:id   │                      │
       │                       │────────────────────>│                      │
       │                       │<─ { status: 'completed', report: [...] }   │
-      │<── Render Q&A         │                     │                      │
+      │<── Render collapsible │                     │                      │
+      │    Q&A with KEY       │                     │                      │
+      │    FINDINGS callout,  │                     │                      │
+      │    markdown charts,   │                     │                      │
+      │    and source tags    │                     │                      │
 ```
 
 ---
@@ -1631,7 +1827,18 @@ db.generated_reports.find({ status: "failed" }).limit(5).pretty()
 **Common causes:**
 - `ANTHROPIC_API_KEY` missing or invalid
 - No source content found (filing not yet processed — run the Python pipeline first)
-- Claude returned malformed JSON (very rare; the parser strips markdown fences)
+- Claude returned malformed JSON in legacy mode (very rare; the parser strips markdown fences)
+- In tool use mode (`showKeyFindings: true`): Claude failed to call the `answer_all_questions` tool — check the error field in the DB document for "Model did not call the answer_all_questions tool"
+
+---
+
+### Analysis has partial answers (some questions empty)
+
+**Symptom:** The completed report has some questions with empty `key_findings`, `analysis`, or `sources` arrays.
+
+**Root cause:** This was a bug in the previous per-question tool design where `tool_choice: 'any'` only guaranteed one tool call. The fix was replacing the per-question tool with `ANSWER_ALL_QUESTIONS_TOOL` which accepts an `answers` array — the model must fill all N answers in a single call.
+
+**If this still occurs:** Check that the analysis used `showKeyFindings: true` and look at the token usage. If `outputTokens` is very high and close to `max_tokens: 8192`, the model may have been cut off before answering all questions. Reduce the number of questions or the volume of source content.
 
 ---
 
