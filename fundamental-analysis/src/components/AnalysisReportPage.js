@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Container, Spinner } from 'react-bootstrap';
+import { ChevronRight, ChevronDown, TrendingUp, BarChart2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import AnalysisText from './AnalysisText';
 
 const STATUS_POLL_INTERVAL_MS = 3000;
 
@@ -51,6 +53,58 @@ function CostPill({ label, value, highlight }) {
   );
 }
 
+// Chip shown in report for each piece of embedded data attached to a question
+function EmbeddedDataChip({ chart }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '0.15rem 0.6rem',
+      borderRadius: 20, background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      fontSize: '0.72rem', color: '#1d4ed8', fontWeight: 500,
+    }}>
+      {chart.icon === 'trend'
+        ? <TrendingUp size={10} style={{ flexShrink: 0 }} />
+        : <BarChart2 size={10} style={{ flexShrink: 0 }} />
+      }
+      {chart.label}
+    </div>
+  );
+}
+
+// Key findings callout with blue left border
+function KeyFindingsCallout({ findings }) {
+  if (!findings?.length) return null;
+  return (
+    <div style={{
+      borderLeft: '4px solid #2563eb',
+      paddingLeft: '1rem', marginBottom: '1.25rem',
+      paddingTop: '0.6rem', paddingBottom: '0.6rem',
+    }}>
+      <div style={{
+        fontSize: '0.7rem', fontWeight: 700,
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+        color: '#1d4ed8', marginBottom: '0.5rem',
+      }}>
+        KEY FINDINGS
+      </div>
+      {findings.map((finding, i) => {
+        const isWarning = /\b(risk|concern|caution|pressure|decline|weak|headwind|but|however|note|caveat)\b/i.test(finding);
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: i < findings.length - 1 ? '0.5rem' : 0 }}>
+            <span style={{ color: isWarning ? '#d97706' : '#16a34a', fontWeight: 700, flexShrink: 0, lineHeight: 1.6, fontSize: '0.875rem' }}>
+              {isWarning ? '⚠' : '✓'}
+            </span>
+            <span style={{ fontSize: '0.875rem', color: '#111', lineHeight: 1.6 }}>
+              {finding}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const AnalysisReportPage = () => {
   const { ticker, analysisId } = useParams();
   const navigate = useNavigate();
@@ -59,8 +113,18 @@ const AnalysisReportPage = () => {
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState(null);
+  // Set of question indices the user has explicitly collapsed
+  const [collapsedQuestions, setCollapsedQuestions] = useState(new Set());
 
   const pollRef = useRef(null);
+
+  const toggleQuestion = (idx) => {
+    setCollapsedQuestions(prev => {
+      const next = new Set(prev);
+      next.has(idx) ? next.delete(idx) : next.add(idx);
+      return next;
+    });
+  };
 
   const fetchAnalysis = async () => {
     try {
@@ -75,7 +139,6 @@ const AnalysisReportPage = () => {
       setAnalysis(data);
       setLoading(false);
 
-      // Stop polling once terminal state is reached
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -90,7 +153,6 @@ const AnalysisReportPage = () => {
 
   useEffect(() => {
     fetchAnalysis();
-    // Start polling — we stop it inside fetchAnalysis once status is terminal
     pollRef.current = setInterval(fetchAnalysis, STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(pollRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,44 +280,100 @@ const AnalysisReportPage = () => {
         </div>
       )}
 
-      {/* Completed report — Q&A pairs */}
+      {/* Completed report */}
       {analysis?.status === 'completed' && Array.isArray(analysis?.report) && (
         <div className="d-flex flex-column gap-3">
-          {analysis.report.map((item, idx) => (
-            <div key={idx} style={{
-              background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12,
-              overflow: 'hidden',
-            }}>
-              {/* Question bar */}
-              <div style={{
-                padding: '0.85rem 1.25rem',
-                background: '#f9fafb', borderBottom: '1px solid #e5e7eb',
-                display: 'flex', alignItems: 'flex-start', gap: 10,
-              }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 6, flexShrink: 0,
-                  background: '#f0f4ff', color: '#2563eb',
-                  fontSize: '0.72rem', fontWeight: 700,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  Q{idx + 1}
-                </div>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#111', paddingTop: 4 }}>
-                  {item.q}
-                </div>
-              </div>
+          {analysis.report.map((item, idx) => {
+            const isCollapsed    = collapsedQuestions.has(idx);
+            const embeddedChips  = analysis.questionEmbeddedData?.[idx] ?? [];
+            // Support both new format {key_findings, analysis} and legacy format {a}
+            const bodyText       = item.analysis ?? item.a ?? '';
+            const keyFindings    = item.key_findings ?? [];
+            const sources        = item.sources ?? [];
 
-              {/* Answer body */}
-              <div style={{ padding: '1rem 1.25rem' }}>
-                <div style={{
-                  fontSize: '0.9rem', color: '#374151', lineHeight: 1.7,
-                  whiteSpace: 'pre-wrap',
-                }}>
-                  {item.a}
-                </div>
+            return (
+              <div key={idx} style={{
+                background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12,
+                overflow: 'hidden',
+              }}>
+                {/* Collapsible question header */}
+                <button
+                  onClick={() => toggleQuestion(idx)}
+                  style={{
+                    width: '100%', padding: '0.85rem 1.25rem',
+                    background: '#f9fafb', border: 'none',
+                    borderBottom: isCollapsed ? 'none' : '1px solid #e5e7eb',
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                    cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 6, flexShrink: 0,
+                    background: '#f0f4ff', color: '#2563eb',
+                    fontSize: '0.72rem', fontWeight: 700,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    Q{idx + 1}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#111', paddingTop: 4 }}>
+                      {item.q}
+                    </div>
+                    {isCollapsed && (
+                      <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 3 }}>
+                        Click to expand full question
+                      </div>
+                    )}
+                  </div>
+                  {isCollapsed
+                    ? <ChevronRight size={14} style={{ color: '#9ca3af', flexShrink: 0, marginTop: 6 }} />
+                    : <ChevronDown  size={14} style={{ color: '#9ca3af', flexShrink: 0, marginTop: 6 }} />
+                  }
+                </button>
+
+                {/* Expanded body */}
+                {!isCollapsed && (
+                  <div style={{ padding: '1.1rem 1.25rem' }}>
+
+                    {/* Key findings callout */}
+                    <KeyFindingsCallout findings={keyFindings} />
+
+                    {/* Embedded data chips */}
+                    {embeddedChips.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: '1rem', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#9ca3af', fontWeight: 500, marginRight: 2 }}>Data:</span>
+                        {embeddedChips.map(chart => (
+                          <EmbeddedDataChip key={chart.id} chart={chart} />
+                        ))}
+                        <span style={{ fontSize: '0.72rem', color: '#9ca3af', fontStyle: 'italic' }}>
+                          — embedded from report configuration
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Analysis text — markdown-aware renderer */}
+                    <AnalysisText text={bodyText} />
+
+                    {/* Source citations */}
+                    {sources.length > 0 && (
+                      <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid #f3f4f6' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' }}>
+                          Sources
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {sources.map((source, sIdx) => (
+                            <div key={sIdx} style={{ padding: '0.2rem 0.55rem', borderRadius: 6, background: '#f9fafb', border: '1px solid #e5e7eb', fontSize: '0.72rem', color: '#6b7280' }}>
+                              {source}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
