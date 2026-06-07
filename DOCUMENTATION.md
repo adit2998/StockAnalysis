@@ -23,6 +23,7 @@ This document provides exhaustive documentation of every component in the DeepVa
    - [routes/tierTemplates.js](#312-routestiertemplatesjs)
    - [routes/analyses.js](#313-routesanalysesjs)
    - [services/analysisService.js](#314-servicesanalysisservicejs)
+   - [seed.js](#315-seedjs)
 4. [Backend — Python Data Pipeline](#4-backend--python-data-pipeline)
    - [config.py](#41-configpy)
    - [sec_api_utils.py](#42-sec_api_utilspy)
@@ -624,6 +625,38 @@ Steps:
 12. Increments `total_spend_gbp` on the user document.
 13. Updates or inserts the current month's entry in `monthly_spend` (checks if an entry for this year+month already exists, then either increments it or pushes a new entry).
 14. On any error: updates the analysis status to `failed` and stores the error message.
+
+---
+
+### 3.15 `seed.js`
+
+One-shot script for populating the `tier_templates` collection in MongoDB. Run manually whenever the tier definitions in `data/tierTemplates.json` change and need to be pushed to the database.
+
+**Usage:**
+
+From outside the cluster (requires an active `kubectl port-forward svc/mongo 27017:27017`):
+```bash
+cd Backend/node-backend
+MONGO_URI=mongodb://admin:secret@localhost:27017/stocks_data?authSource=admin node seed.js
+```
+
+Inside Docker Compose (where the `mongo` hostname resolves):
+```bash
+docker exec -it stockanalysis-server node seed.js
+```
+
+**What it does:**
+1. Loads env vars via `dotenv-flow` (`.env`, then `.env.local` as override). The `MONGO_URI` inline override shown above takes precedence over both.
+2. Reads all tier template objects from `data/tierTemplates.json`.
+3. Connects to MongoDB and targets the `tier_templates` collection.
+4. For each template, calls `updateOne` with `upsert: true`, matching on the `tier` field. This makes the script idempotent — running it multiple times is safe.
+5. Closes the connection and exits.
+
+**When to run:**
+- On first cluster setup, before the app is used (the `GET /api/tier-templates` route falls back to the JSON file if the collection is empty, but seeding is needed for the DB to be the authoritative source).
+- After any edits to `data/tierTemplates.json`.
+
+**Note:** The `MONGO_URI` in `.env.local` (`mongodb://localhost:27017`) has no credentials and will fail against the authenticated cluster instance. Always pass the full URI with credentials as an inline env var when running against Minikube or Docker.
 
 ---
 

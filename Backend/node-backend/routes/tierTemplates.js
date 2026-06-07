@@ -6,7 +6,7 @@ module.exports = (db) => {
 
   router.get('/', async (req, res) => {
     try {
-      const templates = await db.collection('tierTemplates')
+      const templates = await db.collection('tier_templates')
         .find({}, { projection: { _id: 0 } })
         .sort({ tier: 1 })
         .toArray();
