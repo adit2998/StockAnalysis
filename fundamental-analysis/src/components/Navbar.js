@@ -135,6 +135,15 @@ const AppNavbar = () => {
 
         <div style={{ flex: 1 }} />
 
+        {/* Admin badge */}
+        {user?.isAdmin && (
+          <span style={{
+            background: '#fef3c7', color: '#92400e',
+            fontSize: '11px', fontWeight: 600,
+            padding: '3px 9px', borderRadius: '6px', letterSpacing: '0.3px',
+          }}>Admin</span>
+        )}
+
         {/* Bell */}
         <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}>
           <Bell size={20} color="#6b7280" strokeWidth={2} />

@@ -18,6 +18,7 @@ const tierTemplatesRouter = require('./routes/tierTemplates');
 const analysesRouter = require('./routes/analyses');
 const stockHistoryRouter = require('./routes/stockHistory');
 const newsRouter = require('./routes/news');
+const processingRouter = require('./routes/processing');
 
 const app = express();
 
@@ -57,13 +58,19 @@ async function startServer() {
       },
       async (accessToken, refreshToken, profile, done) => {
         try {
+          const adminEmails = (process.env.ADMIN_EMAILS || '')
+            .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+          const email = profile.emails[0].value;
+          const isAdmin = adminEmails.includes(email.toLowerCase());
+
           const user = await db.collection('users').findOneAndUpdate(
             { googleId: profile.id },
             {
               $set: {
                 googleId: profile.id,
-                email: profile.emails[0].value,
+                email,
                 name: profile.displayName,
+                isAdmin,
               },
               $setOnInsert: {
                 companies: [],
@@ -95,6 +102,7 @@ async function startServer() {
     app.use('/api/analyses', analysesRouter(db));
     app.use('/api/stock', stockHistoryRouter(db));
     app.use('/api/news', newsRouter);
+    app.use('/api/processing', processingRouter(db));
 
     const PORT = process.env.PORT || 5001;
     app.listen(PORT, () => {

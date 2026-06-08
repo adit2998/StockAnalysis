@@ -1,9 +1,31 @@
 const express = require('express');
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance();
 
 module.exports = (db) => {
   const router = express.Router();
 
   // Must be registered before /:ticker so "search" isn't treated as a ticker
+  router.get('/search/external', async (req, res) => {
+    try {
+      const { q } = req.query;
+      if (!q || !q.trim()) return res.json([]);
+      const result = await yahooFinance.search(q.trim(), { quotesCount: 8, newsCount: 0 }, { validateResult: false });
+      const US_EXCHANGES = new Set(['NMS', 'NYQ', 'NGM', 'NCM', 'ASE', 'PCX', 'OTC', 'BATS']);
+      const quotes = (result.quotes || [])
+        .filter(quote => quote.quoteType === 'EQUITY' && quote.symbol && US_EXCHANGES.has(quote.exchange))
+        .map(quote => ({
+          ticker: quote.symbol,
+          name: quote.shortname || quote.longname || quote.symbol,
+          industry: quote.industry || quote.industryDisp || null,
+        }));
+      res.json(quotes);
+    } catch (error) {
+      console.error('Error searching external companies:', error);
+      res.json([]);
+    }
+  });
+
   router.get('/search', async (req, res) => {
     try {
       const { q } = req.query;

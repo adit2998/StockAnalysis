@@ -17,7 +17,7 @@ module.exports = () => {
     }),
     (req, res) => {
       const token = jwt.sign(
-        { userId: req.user._id.toString(), email: req.user.email },
+        { userId: req.user._id.toString(), email: req.user.email, isAdmin: req.user.isAdmin || false },
         process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );

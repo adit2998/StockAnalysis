@@ -10,7 +10,7 @@ module.exports = (db) => {
     try {
       const user = await db.collection('users').findOne(
         { _id: new ObjectId(req.user.userId) },
-        { projection: { _id: 1, email: 1, name: 1, companies: 1, total_spend_gbp: 1 } }
+        { projection: { _id: 1, email: 1, name: 1, companies: 1, total_spend_gbp: 1, isAdmin: 1 } }
       );
       if (!user) return res.status(404).json({ error: 'User not found' });
 
