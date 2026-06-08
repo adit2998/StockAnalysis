@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Container } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { Search, X, Plus } from 'lucide-react';
+import { Search, X, Plus, Clock, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import RequestModal from './RequestModal';
+import AdminProcessModal from './AdminProcessModal';
 
 const BADGE_COLORS = [
   { bg: '#dbeafe', color: '#1e40af' },
@@ -22,10 +24,13 @@ const CompaniesList = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [requestModal, setRequestModal] = useState(null);   // company object
+  const [adminModal, setAdminModal] = useState(null);       // company object
   const navigate = useNavigate();
 
   const savedCompanies = user?.companiesData || [];
   const savedTickers = new Set(user?.companies || []);
+  const isAdmin = user?.isAdmin || false;
 
   // Debounced search: waits 300ms after the user stops typing before hitting the API
   useEffect(() => {
@@ -36,12 +41,23 @@ const CompaniesList = () => {
     setSearchLoading(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `${process.env.REACT_APP_API_URL}/api/companies/search?q=${encodeURIComponent(searchQuery)}`
-        );
-        const data = await res.json();
-        // Filter out companies already in the user's list
-        setSearchResults(data.filter(c => !savedTickers.has(c.ticker)));
+        const base = process.env.REACT_APP_API_URL;
+        const encoded = encodeURIComponent(searchQuery);
+        const [internalRes, externalRes] = await Promise.all([
+          fetch(`${base}/api/companies/search?q=${encoded}`),
+          fetch(`${base}/api/companies/search/external?q=${encoded}`),
+        ]);
+        const internalData = await internalRes.json();
+        const externalData = await externalRes.json();
+
+        const internalFiltered = internalData.filter(c => !savedTickers.has(c.ticker));
+        const internalTickers = new Set(internalData.map(c => c.ticker));
+
+        const externalFiltered = externalData
+          .filter(c => !savedTickers.has(c.ticker) && !internalTickers.has(c.ticker))
+          .map(c => ({ ...c, isExternal: true }));
+
+        setSearchResults([...internalFiltered, ...externalFiltered]);
       } catch {
         setSearchResults([]);
       } finally {
@@ -53,13 +69,17 @@ const CompaniesList = () => {
 
   const handleAdd = async (ticker) => {
     await addCompany(ticker);
-    // Remove from search results immediately for instant feedback
     setSearchResults(prev => prev.filter(c => c.ticker !== ticker));
   };
 
   const handleRemove = async (e, ticker) => {
-    e.stopPropagation(); // don't navigate to company page
+    e.stopPropagation();
     await removeCompany(ticker);
+  };
+
+  const closeDropdown = () => {
+    setSearchQuery('');
+    setSearchResults([]);
   };
 
   return (
@@ -128,6 +148,8 @@ const CompaniesList = () => {
             )}
             {!searchLoading && searchResults.map((company, idx) => {
               const badge = getBadgeStyle(company.ticker);
+              const isExternal = !!company.isExternal;
+
               return (
                 <div
                   key={company.ticker}
@@ -137,33 +159,85 @@ const CompaniesList = () => {
                     padding: '12px 16px',
                     borderTop: idx === 0 ? 'none' : '1px solid #f0f0f0',
                     gap: '12px',
+                    background: isExternal ? '#fafafa' : '#fff',
                   }}
                 >
+                  {/* Badge */}
                   <div style={{
                     width: '38px', height: '38px', borderRadius: '8px',
                     background: badge.bg, color: badge.color,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontWeight: 700, fontSize: '10px', letterSpacing: '0.5px', flexShrink: 0,
+                    opacity: isExternal ? 0.7 : 1,
                   }}>
                     {company.ticker.length > 4 ? company.ticker.slice(0, 4) : company.ticker}
                   </div>
+
+                  {/* Name + subtitle */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: '14px', color: '#111' }}>{company.name}</div>
-                    <div style={{ fontSize: '12px', color: '#6b7280' }}>{company.sicDescription}</div>
+                    <div style={{ fontWeight: 600, fontSize: '14px', color: isExternal ? '#374151' : '#111' }}>
+                      {company.name}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '1px' }}>
+                      {isExternal
+                        ? <>{company.industry && <>{company.industry} · </>}<span style={{ color: '#d97706' }}>Not yet in corpus</span></>
+                        : company.sicDescription
+                      }
+                    </div>
                   </div>
-                  <button
-                    onClick={() => handleAdd(company.ticker)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '5px',
-                      background: '#2563eb', color: '#fff',
-                      border: 'none', borderRadius: '6px',
-                      padding: '6px 12px', fontSize: '13px', fontWeight: 500,
-                      cursor: 'pointer', flexShrink: 0,
-                    }}
-                  >
-                    <Plus size={14} />
-                    Add
-                  </button>
+
+                  {/* Actions */}
+                  {!isExternal && (
+                    <button
+                      onClick={() => handleAdd(company.ticker)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '5px',
+                        background: '#2563eb', color: '#fff',
+                        border: 'none', borderRadius: '6px',
+                        padding: '6px 12px', fontSize: '13px', fontWeight: 500,
+                        cursor: 'pointer', flexShrink: 0,
+                      }}
+                    >
+                      <Plus size={14} />
+                      Add
+                    </button>
+                  )}
+
+                  {isExternal && (
+                    <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                      {/* Request — available to all users */}
+                      <button
+                        onClick={() => { setRequestModal(company); closeDropdown(); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '5px',
+                          background: '#fff', color: '#374151',
+                          border: '1px solid #e5e7eb', borderRadius: '6px',
+                          padding: '6px 12px', fontSize: '13px', fontWeight: 500,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Clock size={13} />
+                        Request
+                      </button>
+
+                      {/* Process — admin only */}
+                      {isAdmin && (
+                        <button
+                          onClick={() => { setAdminModal(company); closeDropdown(); }}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: '5px',
+                            background: '#fff', color: '#92400e',
+                            border: '1px solid #fcd34d', borderRadius: '6px',
+                            padding: '6px 12px', fontSize: '13px', fontWeight: 500,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Settings size={13} />
+                          Process
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -206,7 +280,6 @@ const CompaniesList = () => {
                 onMouseEnter={e => e.currentTarget.style.background = '#f5f5f5'}
                 onMouseLeave={e => e.currentTarget.style.background = idx === 0 ? '#f9f9f8' : '#fff'}
               >
-                {/* Ticker badge */}
                 <div style={{
                   width: '52px', height: '52px', borderRadius: '10px',
                   background: badge.bg, color: badge.color,
@@ -217,7 +290,6 @@ const CompaniesList = () => {
                   {company.ticker.length > 4 ? company.ticker.slice(0, 4) : company.ticker}
                 </div>
 
-                {/* Name + industry */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: '16px', color: '#111', lineHeight: 1.3 }}>
                     {company.name}
@@ -227,7 +299,6 @@ const CompaniesList = () => {
                   </div>
                 </div>
 
-                {/* Remove button */}
                 <button
                   onClick={e => handleRemove(e, company.ticker)}
                   title="Remove from list"
@@ -250,6 +321,20 @@ const CompaniesList = () => {
             );
           })}
         </div>
+      )}
+
+      {/* Modals */}
+      {requestModal && (
+        <RequestModal
+          company={requestModal}
+          onClose={() => setRequestModal(null)}
+        />
+      )}
+      {adminModal && (
+        <AdminProcessModal
+          company={adminModal}
+          onClose={() => setAdminModal(null)}
+        />
       )}
     </Container>
   );

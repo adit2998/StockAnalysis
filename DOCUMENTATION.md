@@ -20,10 +20,11 @@ This document provides exhaustive documentation of every component in the DeepVa
    - [routes/news.js](#39-routesnewsjs)
    - [routes/auth.js](#310-routesauthjs)
    - [routes/users.js](#311-routesusersjs)
-   - [routes/tierTemplates.js](#312-routestiertemplatesjs)
-   - [routes/analyses.js](#313-routesanalysesjs)
-   - [services/analysisService.js](#314-servicesanalysisservicejs)
-   - [seed.js](#315-seedjs)
+   - [routes/processing.js](#312-routesprocessingjs)
+   - [routes/tierTemplates.js](#313-routestiertemplatesjs)
+   - [routes/analyses.js](#314-routesanalysesjs)
+   - [services/analysisService.js](#315-servicesanalysisservicejs)
+   - [seed.js](#316-seedjs)
 4. [Backend — Python Data Pipeline](#4-backend--python-data-pipeline)
    - [config.py](#41-configpy)
    - [sec_api_utils.py](#42-sec_api_utilspy)
@@ -32,11 +33,13 @@ This document provides exhaustive documentation of every component in the DeepVa
    - [extractors.py](#45-extractorspy)
    - [process_reports.py](#46-process_reportspy)
    - [company_processing_pipeline.py](#47-company_processing_pipelinepy)
+   - [process_cli.py](#48-process_clipy)
 5. [Frontend — React Application](#5-frontend--react-application)
    - [Application Entry and Routing](#51-application-entry-and-routing)
    - [AuthContext](#52-authcontext)
    - [Page Components (including AnalysisText.js)](#53-page-components)
    - [Company Page Tabs](#54-company-page-tabs)
+   - [RequestModal and AdminProcessModal](#55-requestmodal-and-adminprocessmodal)
 6. [Docker Configuration](#6-docker-configuration)
    - [Node Backend Dockerfile](#61-node-backend-dockerfile)
    - [Frontend Dockerfile](#62-frontend-dockerfile)
@@ -50,6 +53,7 @@ This document provides exhaustive documentation of every component in the DeepVa
    - [Authentication Flow](#81-authentication-flow)
    - [Company Data Ingestion Flow](#82-company-data-ingestion-flow)
    - [AI Analysis Creation Flow](#83-ai-analysis-creation-flow)
+   - [Company Processing Request Flow](#84-company-processing-request-flow)
 9. [Debugging and Troubleshooting](#9-debugging-and-troubleshooting)
 
 ---
@@ -68,7 +72,7 @@ DeepVal is a three-tier application:
 │                  Node.js / Express API                       │
 │                      (port 5001)                             │
 │  Routes: companies, financials, analyses, auth, users,       │
-│          stock, news, reports, tier-templates                │
+│          stock, news, reports, tier-templates, processing    │
 │  Services: analysisService (AI orchestration)               │
 └──────┬────────────────────────────┬───────────────────────┬─┘
        │                            │                       │
@@ -89,7 +93,7 @@ DeepVal is a three-tier application:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The Python pipeline is a batch process run manually to ingest data for a company. The Node API and React frontend are the live, user-facing services.
+The Python pipeline can be triggered in two ways: manually from the command line, or automatically via the Node API when a user or admin submits a processing request. In the latter case, the Node server spawns `process_cli.py` as a detached background subprocess. The Node API and React frontend are the live, user-facing services.
 
 **Authentication**: Google OAuth 2.0 handles identity verification. After OAuth completes, the backend issues a JWT (valid 7 days) which the frontend stores and sends in every API request header.
 
@@ -236,6 +240,7 @@ One document per registered user.
   "googleId": "118232...",
   "email": "user@gmail.com",
   "name": "Jane Smith",
+  "isAdmin": false,
   "companies": ["AAPL", "MSFT"],
   "generated_reports": [ObjectId, ObjectId],
   "total_spend_gbp": 0.0423,
@@ -245,6 +250,24 @@ One document per registered user.
   ]
 }
 ```
+
+`isAdmin` is set automatically during Google OAuth login by checking the user's email against the `ADMIN_EMAILS` environment variable (comma-separated list). It is updated on every login so adding or removing an admin takes effect on their next sign-in.
+
+### `processing_requests`
+One document per user-submitted company processing request. Used for deduplication (prevents the same company from being queued twice simultaneously).
+```json
+{
+  "_id": ObjectId,
+  "ticker": "CRWD",
+  "name": "CrowdStrike Holdings, Inc.",
+  "requestedBy": "userId_string",
+  "requestType": "user",
+  "status": "processing",
+  "createdAt": "2026-06-09T10:00:00Z"
+}
+```
+
+`requestType` is `"user"` for requests from the regular user flow. Admin-initiated "Queue for users" and "Process now" actions do not create a request document — they fire the pipeline directly.
 
 ### `income_statements`, `balance_sheets`, `cash_flow_statements`
 One document per ticker per period type (annual or quarterly). Populated by yfinance via the Python pipeline. Each row carries both the raw dollar values and pre-computed common-sized percentages.
@@ -339,9 +362,12 @@ The single async function that bootstraps everything:
 **Google OAuth Strategy setup (inside `startServer`)**
 On every OAuth login:
 - Searches `users` collection for `{ googleId: profile.id }`.
-- If found: updates `email` and `name` (profile may change over time).
+- If found: updates `email`, `name`, and `isAdmin` (recalculated on every login from `ADMIN_EMAILS`).
 - If not found: creates a new user document with empty `companies`, `generated_reports`, zero spend.
 - Uses MongoDB `upsert: true` + `returnDocument: 'after'` to do this atomically.
+
+**Admin detection:**
+The `ADMIN_EMAILS` environment variable holds a comma-separated list of email addresses with admin privileges (e.g. `ADMIN_EMAILS=adit.kotwal29@gmail.com`). During the OAuth strategy, the logged-in user's email is compared (case-insensitively) against this list. The result is stored as `isAdmin: true/false` in the user document and is subsequently baked into the JWT and returned by `/api/users/me`.
 
 **Session handling note**
 Express sessions are configured (`express-session`) but are only used during the OAuth redirect handshake (the 2-step browser redirect to Google and back). After that, all authentication is stateless via JWT. The session is not used for anything else.
@@ -395,10 +421,20 @@ logger.warn('Skipping item', { id: 'xyz' });
 
 Company search and data endpoints. Does not require authentication.
 
+**`GET /api/companies/search/external?q=<query>`**
+Searches Yahoo Finance for companies not yet in the corpus. Used alongside the internal search to surface tickers the user can *request* processing for.
+- Uses the `yahoo-finance2` v3 package (instantiated as `new YahooFinance()`).
+- Calls `yahooFinance.search(q, { quotesCount: 8, newsCount: 0 }, { validateResult: false })`.
+  - `validateResult: false` bypasses the library's schema validation, which can fail when Yahoo Finance changes field casing (e.g. `'Equity'` vs `'equity'`).
+- Filters to US-listed equities only using the `US_EXCHANGES` set: `NMS`, `NYQ`, `NGM`, `NCM`, `ASE`, `PCX`, `OTC`, `BATS`. This prevents the same company appearing multiple times for foreign exchange listings (e.g. CRWD on NASDAQ plus MTE.F on Frankfurt).
+- Returns `[{ ticker, name, industry }]`. The `industry` field is shown in the search dropdown below the company name.
+
+> Registered as `/search/external` **before** `/:ticker` to prevent "search" or "external" being treated as ticker symbols.
+
 **`GET /api/companies/search?q=<query>`**
 - Input: `q` query string (ticker or company name).
 - Escapes special regex characters from the input to prevent regex injection.
-- Runs a case-insensitive regex search against both `ticker` and `name` fields.
+- Runs a case-insensitive regex search against both `ticker` and `name` fields in `companies_list` (i.e. only companies already in the corpus).
 - Returns up to 10 matching documents.
 - Returns `[]` if `q` is empty.
 
@@ -527,8 +563,10 @@ Step 1: Redirects the browser to Google's OAuth consent page. Passport requests 
 Step 2: Google redirects back here after the user consents.
 - Passport's `authenticate` middleware intercepts the code, exchanges it with Google for a user profile, and runs the Google Strategy function defined in `server.js` (which upserts the user in MongoDB).
 - On failure: redirects to `FRONTEND_URL/login?error=auth_failed`.
-- On success: generates a JWT signed with `JWT_SECRET`, valid for 7 days. The payload is `{ userId, email }`.
+- On success: generates a JWT signed with `JWT_SECRET`, valid for 7 days. The payload is `{ userId, email, isAdmin }`.
 - Redirects the browser to `FRONTEND_URL/auth/callback?token=<jwt>`. The React frontend reads the token from the URL, stores it, and proceeds.
+
+`isAdmin` is baked into the JWT at login time from the user's MongoDB document (which was just upserted by the OAuth strategy). This means the auth middleware can check admin status on every request without a DB lookup.
 
 ---
 
@@ -538,9 +576,9 @@ User profile and company watchlist management. All routes require authentication
 
 **`GET /api/users/me`**
 Returns the current user's profile including their saved companies.
-- Fetches the user document (projected to `_id`, `email`, `name`, `companies`, `total_spend_gbp`).
+- Fetches the user document (projected to `_id`, `email`, `name`, `companies`, `total_spend_gbp`, `isAdmin`).
 - Resolves the list of tickers in `companies` to full company objects from `companies_list`.
-- Returns both in a combined response.
+- Returns both in a combined response, including the `isAdmin` flag which the frontend uses to show/hide admin-only UI.
 
 **`GET /api/users/stats`**
 Returns aggregated stats for the profile page dashboard.
@@ -559,7 +597,49 @@ Removes a ticker from the user's `companies` array using `$pull`.
 
 ---
 
-### 3.12 `routes/tierTemplates.js`
+### 3.12 `routes/processing.js`
+
+Company processing pipeline trigger endpoints. All routes require authentication.
+
+The Node.js backend does not run Python directly — it spawns `process_cli.py` as a **detached background subprocess** using Node's `child_process.spawn`. The subprocess runs independently; the HTTP response is returned immediately without waiting for processing to complete.
+
+**`spawnPipeline(params)`** (internal helper)
+- Creates a timestamped log file at `logs/processing/<TICKER>-<timestamp>.log` (directory controlled by `PROCESSING_LOG_DIR` env var, defaulting to `Backend/node-backend/logs/processing/`).
+- Spawns `python3 process_cli.py '<json_params>'` with `cwd` set to the `info-processing/` directory (configurable via `PYTHON_PIPELINE_DIR` env var).
+- Both stdout and stderr are redirected to the log file (`stdio: ['ignore', out, out]`).
+- Calls `proc.unref()` so the Node process can exit independently of the child.
+- Returns `{ proc, logFile }`. The `logFile` path is included in API responses so it can be used for `tail -f` monitoring.
+
+**`POST /api/processing/request`** — any authenticated user
+Queues a company for basic processing (no AI summarisation).
+- Reads `{ ticker, name, include10K, include10Q, includeProxy }` from request body. Form type flags default to `include10K: true`, `include10Q: false`, `includeProxy: false`.
+- Deduplication: rejects (409) if the ticker is already in `companies_list`, returns `{ alreadyQueued: true }` if there's already a `pending`/`processing` request for that ticker.
+- Inserts a document into `processing_requests` with `status: 'processing'` and `requestType: 'user'`.
+- Calls `spawnPipeline` with all `summarize*` flags `false` (fetch and chunk only, no Claude calls).
+- Returns `{ success: true, logFile }`.
+
+**`POST /api/processing/process`** — admin only (`req.user.isAdmin` must be true)
+Processes a company immediately with full summarisation control.
+- Reads `{ ticker, name, include10K, include10Q, includeProxy, summarize10K, num10KSummaries, summarize10Q, num10QSummaries, summarizeProxy, numProxySummaries }`.
+- Calls `spawnPipeline` passing all settings through. Per-type summarisation counts are forwarded to `process_cli.py`.
+- Returns `{ success: true, logFile }`.
+
+**`POST /api/processing/queue`** — admin only
+Ingests a company without summarisation and without logging a `processing_requests` record. Intended for batch-adding companies to the corpus ahead of user demand.
+- Reads `{ ticker, name, include10K, include10Q, includeProxy }`.
+- Calls `spawnPipeline` with all `summarize*` flags `false`.
+- Returns `{ success: true, logFile }`.
+
+**Environment variables:**
+| Variable | Default | Purpose |
+|---|---|---|
+| `PYTHON_PIPELINE_DIR` | `../../info-processing` (relative to routes/) | Directory containing `process_cli.py` |
+| `PYTHON_CMD` | `python3` | Python executable name |
+| `PROCESSING_LOG_DIR` | `../logs/processing` (relative to routes/) | Where per-run log files are written |
+
+---
+
+### 3.13 `routes/tierTemplates.js`
 
 Returns the analysis tier configuration from `data/tierTemplates.json`. This is a simple read of a static JSON file — no database involved.
 
@@ -575,7 +655,7 @@ The 5 tiers from least to most comprehensive:
 
 ---
 
-### 3.13 `routes/analyses.js`
+### 3.14 `routes/analyses.js`
 
 AI analysis management. All routes require authentication.
 
@@ -636,7 +716,7 @@ The `setImmediate` pattern means the response goes back to the client in millise
 
 ---
 
-### 3.14 `services/analysisService.js`
+### 3.15 `services/analysisService.js`
 
 The core AI analysis orchestration layer. Contains the business logic for cost estimation and running analyses.
 
@@ -718,7 +798,7 @@ The main async analysis runner. Called fire-and-forget from the API route. Extra
 
 ---
 
-### 3.15 `seed.js`
+### 3.16 `seed.js`
 
 One-shot script for populating the `tier_templates` collection in MongoDB. Run manually whenever the tier definitions in `data/tierTemplates.json` change and need to be pushed to the database.
 
@@ -1138,11 +1218,52 @@ Top-level function that runs all 6 steps in sequence for a given ticker:
 5. `save_report_sections`
 6. `save_financial_statements`
 
-The last two lines at the bottom of the file are the **run configuration** — edit these to change what gets processed:
+The bottom of the file contains a run configuration for direct script execution, guarded by `if __name__ == '__main__':` so it does **not** execute when the module is imported by `process_cli.py`:
 ```python
-form_types = [FormType.TEN_K]
-process_company('AAPL', form_types, max_summaries=0)
+if __name__ == '__main__':
+    form_types = [FormType.TEN_K]
+    process_company('AAPL', form_types, max_summaries=0)
 ```
+
+---
+
+### 4.8 `process_cli.py`
+
+CLI entry point used by the Node.js backend to trigger company processing as a subprocess. This script exists specifically so `routes/processing.js` can spawn the pipeline without executing the module-level test code in `company_processing_pipeline.py`.
+
+**Usage:**
+```bash
+python process_cli.py '<json_params>'
+```
+
+**Params JSON shape:**
+```json
+{
+  "ticker": "CRWD",
+  "include10K": true,
+  "include10Q": false,
+  "includeProxy": false,
+  "summarize10K": false,
+  "num10KSummaries": 1,
+  "summarize10Q": false,
+  "num10QSummaries": 1,
+  "summarizeProxy": false,
+  "numProxySummaries": 1
+}
+```
+
+All `include*` flags default to `true` if absent (safe fallback); all `summarize*` flags default to `false`.
+
+**What it does:**
+1. Builds `form_types` list from the include flags.
+2. Calls `add_to_companies_list`, `save_company_financials`, `save_company_reports_list`, `save_report_pdfs` for all selected form types.
+3. Calls `save_report_sections` **separately per form type** with the appropriate `max_summaries` for each:
+   - `max_summaries = num*Summaries` if the corresponding `summarize*` flag is `true`, else `0`.
+   - `max_summaries=0` means sections are extracted but Claude is never called.
+4. Calls `save_financial_statements`.
+
+**Why per-type `save_report_sections` calls?**
+The pipeline's `save_report_sections(ticker, form_types, max_summaries)` applies a single `max_summaries` limit across all form types passed in one call. To allow different summarisation counts per type (e.g. 4 10-Ks but only 1 proxy), `process_cli.py` calls it once per form type with the matching limit.
 
 ---
 
@@ -1191,6 +1312,8 @@ Protected routes use `<ProtectedRoute>` which redirects to `/login` if no JWT is
 
 **Initialization**: On mount, checks localStorage for an existing token. If found and not expired (checks the `exp` field in the JWT payload), restores the session. Otherwise clears localStorage.
 
+The `user` object decoded from the JWT includes `{ userId, email, isAdmin }`. Components read `user?.isAdmin` to conditionally render admin-only UI (e.g., Admin badge in the navbar, "Process" button in the company search dropdown). Because `isAdmin` is baked into the JWT at login time, a user whose admin status changes must sign out and sign back in for the change to take effect.
+
 ---
 
 ### 5.3 Page Components
@@ -1205,7 +1328,7 @@ Simple login page with a "Sign in with Google" button that redirects to `GET /ap
 Handles the OAuth redirect. Reads the `?token=` query parameter from the URL, calls `login(token)` from `AuthContext`, then navigates to `/companies`. Shows an error state if the token is missing.
 
 **`Navbar.js`**
-Top navigation bar. Shows brand name, navigation links, and user avatar/name. Has a logout button that calls `logout()` from context.
+Top navigation bar. Shows brand name, navigation links, and user avatar/name. Has a logout button that calls `logout()` from context. When `user?.isAdmin` is true, displays an amber **Admin** badge between the navigation links and the bell icon. The badge is purely visual — it signals to admins that they have elevated privileges without affecting navigation behaviour. Also renders a context/breadcrumb bar below the main navbar when on a company or filings page, showing a back chevron and the company's SIC description.
 
 **`ProtectedRoute.js`**
 HOC that wraps a component and redirects to `/login` if there's no JWT in context. Shows a loading spinner while auth state is being restored from localStorage.
@@ -1213,9 +1336,14 @@ HOC that wraps a component and redirects to `/login` if there's no JWT in contex
 **`CompaniesList.js`**
 Company search and management page.
 - Shows the user's saved companies with real-time quotes.
-- Has a search bar that queries `GET /api/companies/search?q=`.
+- Has a search bar that triggers a **dual search** on each keystroke: `GET /api/companies/search?q=` (corpus) and `GET /api/companies/search/external?q=` (Yahoo Finance). Both fetches run in parallel via `Promise.all`.
+- Internal corpus results display with a `+ Add` button (adds the company to the user's watchlist).
+- External results (not yet in corpus) render below corpus results with `isExternal: true` styling: a slightly muted background, and a subtitle line showing `{industry} · Not yet in corpus` (amber text). Two action buttons are shown:
+  - **Request** (Clock icon, visible to all users) — opens `RequestModal`.
+  - **Process** (Settings icon, amber border, visible to admins only — `user?.isAdmin`) — opens `AdminProcessModal`.
+- Clicking either button closes the search dropdown and opens the corresponding modal.
 - Allows adding/removing companies from the watchlist via `POST/DELETE /api/users/companies/:ticker`.
-- Clicking a company navigates to `/companies/:ticker`.
+- Clicking a saved company navigates to `/companies/:ticker`.
 
 **`CompanyPage.js`**
 Main company dashboard with 6 tabs: Overview, Trends, Financials, Filings, News, Analysis. Tab content is loaded lazily — data is only fetched when a tab is first activated.
@@ -1399,6 +1527,61 @@ Renders news articles from Finnhub. Shows thumbnail, title (as a link), publishe
 
 **`AnalysisTab.js`**
 Lists the current user's analyses for this company. Shows tier, status, cost, and a link to the full analysis report.
+
+---
+
+### 5.5 `RequestModal` and `AdminProcessModal`
+
+Two modal dialogs that appear when a user or admin acts on an external (not-yet-in-corpus) company in the search dropdown.
+
+#### `RequestModal.js` — regular users
+
+Opened when any authenticated user clicks the **Request** button next to an external search result.
+
+**State:**
+- `include10K`, `include10Q`, `includeProxy` — which filing types to include. Defaults: `include10K: true`, others `false`.
+- `loading`, `done` — submission lifecycle.
+
+**`noneSelected`** — boolean computed from the three include flags. The Submit button is disabled and shows a validation message when `true`.
+
+**Layout:**
+- Header: company name + ticker.
+- "Filings to fetch" section with three checkboxes.
+- Two info callouts (using a shared `Callout` component):
+  - Info icon (blue): describes what will be processed (financial statements, trends). No AI summaries.
+  - Clock icon (grey): notes that processing runs in the background and typically takes a few minutes.
+- Footer: Cancel + **Submit request** button.
+
+**Submit flow:**
+1. POSTs to `POST /api/processing/request` with `{ ticker, name, include10K, include10Q, includeProxy }`.
+2. On success: calls `onRequested(company.ticker)` (parent can update UI), sets `done: true`, button turns green ("Requested!"), modal auto-closes after 1.2 seconds.
+
+#### `AdminProcessModal.js` — admin users
+
+Opened when an admin clicks the **Process** button next to an external search result. Provides full control over per-type summarisation.
+
+**State:**
+- `include10K`, `include10Q`, `includeProxy` — which filing types to fetch (same defaults as `RequestModal`).
+- `summarize10K`, `summarize10Q`, `summarizeProxy` — whether to run Claude summarization for each type. Defaults: `summarize10K: true`, `summarize10Q: false`, `summarizeProxy: true`.
+- `num10K`, `num10Q`, `numProxy` — how many filings to summarize per type (all default to `1`).
+- `loading`, `done`.
+
+**Sub-components:**
+- **`Counter`** — a +/− spinner for a number value. Props: `value`, `onChange`, `min` (default 1), `max` (default 20). The − button is disabled when `value === min`; + is disabled when `value === max`.
+- **`Checkbox`** — styled checkbox with optional `disabled` prop (greys out and ignores `onChange` when the corresponding include flag is off).
+- **`SubPanel`** — indented panel with a left border, wrapping the "Number to summarise" control. Only shown when both the include and summarize flags are true for a given type.
+
+**`noneSelected`** — disables both action buttons and shows a validation message.
+
+**`estimatedCalls`** — count of Claude API calls the action will trigger. Only counts types that are both included **and** to be summarized. Displayed in the amber cost-estimate callout at the bottom of the body.
+
+**`buildBody(forceSummarizeOff)`** — helper that constructs the POST body. When `forceSummarizeOff` is `true`, all `summarize*` flags are set to `false` (used for the Queue action). Otherwise, passes the actual checkbox states.
+
+**Two action buttons:**
+- **Queue for users** (Users icon, white/bordered) — calls `submit('queue')`, which POSTs to `POST /api/processing/queue` with `buildBody(true)`. Fetches and chunks all selected filing types; no Claude calls.
+- **Process now** (Zap icon, black/filled) — calls `submit('process')`, which POSTs to `POST /api/processing/process` with `buildBody(false)`. Runs with full per-type summarisation settings.
+
+Both buttons share the same success path: `done: true`, the "Process now" button turns green ("Triggered!"), modal auto-closes after 1.2 seconds.
 
 ---
 
@@ -1712,6 +1895,89 @@ User (Browser)         React Frontend          Node API            Background Pr
       │    and source tags    │                     │                      │
 ```
 
+### 8.4 Company Processing Request Flow
+
+```
+User / Admin (Browser)    React Frontend            Node API              Python (subprocess)
+         │                      │                      │                         │
+         │  Search for company  │                      │                         │
+         │─────────────────────>│                      │                         │
+         │                      │ GET /companies/search (internal)                │
+         │                      │ GET /companies/search/external (Yahoo Finance)  │
+         │                      │──────────────────────> (both in parallel)       │
+         │                      │<─ corpus results + external results             │
+         │<── Dropdown: internal │                      │                         │
+         │    results + external │                      │                         │
+         │    "Not yet in corpus"│                      │                         │
+         │                      │                      │                         │
+         │  [User] Click Request │                      │                         │
+         │─────────────────────>│                      │                         │
+         │                      │ RequestModal opens   │                         │
+         │  Select filing types  │                      │                         │
+         │  Click Submit request │                      │                         │
+         │─────────────────────>│                      │                         │
+         │                      │ POST /processing/request                        │
+         │                      │ { ticker, include10K, include10Q, includeProxy }│
+         │                      │──────────────────────>                          │
+         │                      │        Check companies_list (409 if exists)     │
+         │                      │        Check processing_requests (skip if dupe) │
+         │                      │        Insert { status:'processing', requestType:'user' }
+         │                      │        spawnPipeline({ summarize*: false })      │
+         │                      │          → python process_cli.py '<json>'       │──────────>│
+         │                      │<─ { success: true, logFile }                    │           │
+         │<── Modal: "Requested!"│                      │                         │ fetch+chunk│
+         │                      │                      │                         │ (no Claude)│
+         │                      │                      │                         │           │
+         │  [Admin] Click Process│                      │                         │           │
+         │─────────────────────>│                      │                         │           │
+         │                      │ AdminProcessModal opens                         │           │
+         │  Configure filing     │                      │                         │           │
+         │  types + summarisation│                      │                         │           │
+         │  Click "Process now"  │                      │                         │           │
+         │─────────────────────>│                      │                         │           │
+         │                      │ POST /processing/process                        │           │
+         │                      │ { ticker, include*, summarize*, num*Summaries } │           │
+         │                      │──────────────────────>                          │           │
+         │                      │        isAdmin check (403 if not admin)         │           │
+         │                      │        spawnPipeline(full params)               │           │
+         │                      │          → python process_cli.py '<json>'       │──────────>│
+         │                      │<─ { success: true, logFile }                    │           │
+         │<── Modal: "Triggered!"│                      │                         │ fetch+chunk│
+         │                      │                      │                         │ + Claude   │
+         │                      │                      │                         │   summaries│
+         │                      │                      │                         │           │
+         │  [Admin] Click Queue  │                      │                         │           │
+         │─────────────────────>│  (same modal, "Queue │                         │           │
+         │                      │   for users" button) │                         │           │
+         │                      │ POST /processing/queue                          │           │
+         │                      │ { ticker, include*, summarize*: all false }     │           │
+         │                      │──────────────────────>                          │           │
+         │                      │        isAdmin check                            │           │
+         │                      │        spawnPipeline({ summarize*: false })     │──────────>│
+         │                      │<─ { success: true, logFile }                    │ fetch+chunk│
+         │<── Modal: "Triggered!"│                      │                         │ (no Claude)│
+```
+
+**Key differences between the three actions:**
+
+| Action | Who | summarize | DB record | Use case |
+|---|---|---|---|---|
+| Request | Any user | Never | `processing_requests` doc created | User wants a new company added |
+| Queue for users | Admin only | Never | No record | Pre-populate corpus in batch |
+| Process now | Admin only | Per-type settings | No record | Full ingest with summaries for AI analysis |
+
+**Monitoring a running pipeline:**
+```bash
+# The logFile path is returned in the API response — or find the latest log:
+ls -t Backend/node-backend/logs/processing/ | head -5
+
+# Stream output in real time
+tail -f Backend/node-backend/logs/processing/TICKER-YYYY-MM-DDTHH-MM-SS-sssZ.log
+
+# Check if the process is still running
+ps aux | grep process_cli.py
+```
+
 ---
 
 ## 9. Debugging and Troubleshooting
@@ -1961,6 +2227,55 @@ cat Backend/node-backend/logs/error-$(date +%Y-%m-%d).log | python3 -m json.tool
 # Find all analysis-related log entries
 grep '"analysisId"' Backend/node-backend/logs/combined-$(date +%Y-%m-%d).log
 ```
+
+---
+
+### Processing pipeline doesn't seem to run
+
+**Symptom:** You triggered a "Request" or "Process now" action but nothing appears to be happening. The company doesn't show up in the corpus after waiting.
+
+**Step 1:** Find the log file. The API response includes a `logFile` path — check the browser network tab (response body of the `POST /api/processing/*` call) or list the directory:
+```bash
+ls -t Backend/node-backend/logs/processing/
+```
+
+**Step 2:** Stream the log in real time:
+```bash
+tail -f Backend/node-backend/logs/processing/<TICKER>-<timestamp>.log
+```
+All stdout and stderr from the Python subprocess is captured here. Look for Python tracebacks, import errors, or "No financial data found" messages.
+
+**Step 3:** Check if the subprocess is still running:
+```bash
+ps aux | grep process_cli.py
+```
+If you see a Python process, it's still running. If not, the process finished (or never started — check the log for an immediate error).
+
+**Step 4:** Check that the Node backend was restarted after any code changes to `routes/processing.js`. The Node process must be restarted for new code (including logging setup) to take effect.
+
+**Step 5:** Verify `PYTHON_PIPELINE_DIR` and `PYTHON_CMD` env vars are correct. The default is `python3` and the path relative to `routes/` is `../../info-processing`. If your Python virtual environment is not activated or `process_cli.py` is in a different location, the spawn will fail silently (check the log file for the error).
+
+**Step 6:** If the log file is empty or doesn't exist, the process likely failed before any output was written. Check Node server logs for spawn errors:
+```bash
+cat Backend/node-backend/logs/error-$(date +%Y-%m-%d).log
+```
+
+---
+
+### Admin badge or "Process" button not showing
+
+**Symptom:** A user whose email is in `ADMIN_EMAILS` doesn't see the Admin badge or the Process button.
+
+**Cause:** `isAdmin` is baked into the JWT at login time. The JWT is valid for 7 days — if the user was already logged in when the `ADMIN_EMAILS` env var was added, their existing JWT has `isAdmin: false`.
+
+**Fix:** The user must sign out and sign back in. A fresh JWT will be issued with `isAdmin: true`.
+
+**Verify `ADMIN_EMAILS` is set correctly:**
+```bash
+grep ADMIN_EMAILS Backend/node-backend/.env
+# Should output: ADMIN_EMAILS=adit.kotwal29@gmail.com
+```
+The comparison is case-insensitive, so capitalization in the env var doesn't matter.
 
 ---
 

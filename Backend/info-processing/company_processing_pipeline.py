@@ -382,5 +382,6 @@ def process_company(ticker, form_types=[FormType.TEN_K], max_summaries=None):
     save_financial_statements(ticker)
 
 
-form_types = [FormType.TEN_K]
-process_company('AAPL', form_types, max_summaries=0)
+if __name__ == '__main__':
+    form_types = [FormType.TEN_K]
+    process_company('AAPL', form_types, max_summaries=0)
