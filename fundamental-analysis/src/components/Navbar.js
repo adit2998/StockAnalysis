@@ -100,7 +100,7 @@ const AppNavbar = () => {
   };
 
   return (
-    <header style={{
+    <header className="no-print" style={{
       position: 'sticky',
       top: 0,
       zIndex: 100,

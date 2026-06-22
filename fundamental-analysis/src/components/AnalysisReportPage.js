@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Container, Spinner } from 'react-bootstrap';
-import { ChevronRight, ChevronDown, TrendingUp, BarChart2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, TrendingUp, BarChart2, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import AnalysisText from './AnalysisText';
 
@@ -118,6 +118,15 @@ const AnalysisReportPage = () => {
 
   const pollRef = useRef(null);
 
+  const handleDownloadPDF = () => {
+    const saved = new Set(collapsedQuestions);
+    setCollapsedQuestions(new Set());
+    setTimeout(() => {
+      window.print();
+      setCollapsedQuestions(saved);
+    }, 150);
+  };
+
   const toggleQuestion = (idx) => {
     setCollapsedQuestions(prev => {
       const next = new Set(prev);
@@ -195,8 +204,17 @@ const AnalysisReportPage = () => {
   return (
     <Container className="mt-4" style={{ maxWidth: 860 }}>
 
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .container, .container-fluid { max-width: 100% !important; padding: 0 !important; }
+          @page { margin: 1.5cm; }
+        }
+      `}</style>
+
       {/* Breadcrumb */}
-      <div className="d-flex align-items-center gap-2 mb-4" style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+      <div className="no-print d-flex align-items-center gap-2 mb-4" style={{ fontSize: '0.875rem', color: '#6b7280' }}>
         <button
           onClick={() => navigate(`/companies/${ticker}`, { state: { defaultTab: 'analysis' } })}
           style={{ background: 'none', border: 'none', padding: 0, color: '#6b7280', cursor: 'pointer', fontSize: '0.875rem' }}
@@ -227,6 +245,22 @@ const AnalysisReportPage = () => {
             {analysis?.companyName} ({analysis?.ticker}) — {analysis?.tierName}
           </div>
           <StatusBadge status={analysis?.status} />
+          {analysis?.status === 'completed' && (
+            <button
+              className="no-print"
+              onClick={handleDownloadPDF}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0.4rem 0.85rem', borderRadius: 7,
+                background: '#2563eb', color: '#fff',
+                border: 'none', cursor: 'pointer',
+                fontSize: '0.8rem', fontWeight: 600,
+              }}
+            >
+              <Download size={13} />
+              Download PDF
+            </button>
+          )}
         </div>
 
         <div className="d-flex align-items-center gap-2 mt-2" style={{ fontSize: '0.82rem', color: '#6b7280' }}>
@@ -237,7 +271,7 @@ const AnalysisReportPage = () => {
         </div>
 
         {/* Cost row */}
-        <div className="d-flex gap-2 mt-3 flex-wrap">
+        <div className="no-print d-flex gap-2 mt-3 flex-wrap">
           <CostPill label="Estimated cost" value={fmtCost(analysis?.estimatedCostGBP)} />
           <CostPill label="Actual cost" value={fmtCost(analysis?.actualCostGBP)} highlight />
           {analysis?.tokenUsage && (

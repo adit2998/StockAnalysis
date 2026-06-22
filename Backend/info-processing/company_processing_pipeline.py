@@ -246,7 +246,11 @@ def save_report_sections(ticker, form_types, max_summaries=None):
     for company_report in company_reports:
         filename = company_report['File name']
         form_type = company_report['Form Type']
-        report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename, form_type=form_type)
+        try:
+            report_content = extract_content_with_sections(mongo_uri, db_name, ticker, filename, form_type=form_type)
+        except RuntimeError as e:
+            print(f"Skipping {filename}: {e}")
+            continue
 
         print(f"Saving sections - {report_content['file_name']}")
         write_report_to_mongo(mongo_uri, db_name, "report_sections", report_content)

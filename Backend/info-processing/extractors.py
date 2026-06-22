@@ -114,7 +114,7 @@ def _title_keywords(title):
     return [w for w in re.split(r'\W+', title.upper()) if len(w) > 3]
 
 
-def _find_toc_page_10k(document, max_scan=15):
+def _find_toc_page_10k(document, max_scan=25):
     for pn in range(min(max_scan, len(document))):
         text = document[pn].get_text()
         if len(_TOC_ITEM_STANDALONE.findall(text)) >= 3:

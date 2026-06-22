@@ -28,7 +28,6 @@ def calculateRatios(dataDf):
         df['Effective Revenue'] = np.nan
 
     
-    df['Operating Margin Ratio'] = df['Operating Income (Loss)'] / df['Effective Revenue']
     ratioDictionary = {
         'Gross Margin Ratio': (['Gross Profit', 'Effective Revenue'], lambda df: df['Gross Profit'] / df['Effective Revenue']),
         'Operating Margin Ratio': (['Operating Income (Loss)', 'Effective Revenue'], lambda df: df['Operating Income (Loss)'] / df['Effective Revenue']),
